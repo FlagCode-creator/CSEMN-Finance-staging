@@ -376,9 +376,10 @@ function renderSafe_() {
   if (st.focus && g(st.focus)) g(st.focus).focus();
 }
 
-function refreshData(level = 'full') {
+// pending = คำขอ getScopedData ที่ส่งไปแล้ว (ตอนล็อกอินใช้คำขอเดียวทั้งตรวจรหัสและโหลดข้อมูล)
+function refreshData(level = 'full', pending) {
   const mySeq = ++refreshSeq;
-  return GAS.getScoped({ level }).then(res => {
+  return (pending || GAS.getScoped({ level })).then(res => {
     // มีการโหลดครั้งใหม่กว่าเกิดขึ้นแล้ว (เช่น ล็อกอินระหว่างรอหน้าแรก) → ทิ้งผลเก่า
     // กันข้อมูลหน้าแรก (ค่าว่าง) มาทับข้อมูลเจ้าหน้าที่ที่โหลดเสร็จก่อน
     if (mySeq !== refreshSeq) return false;
@@ -2648,16 +2649,17 @@ function attachWelcomeHandlers() {
     const orig = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>กำลังเข้าสู่ระบบ...';
 
     authCredential = { user: user, pass: pass }; // ส่งบัญชีให้ GAS ตรวจ — หน้าเว็บไม่เก็บรหัสเจ้าหน้าที่ไว้เลย
-    const res = await GAS.checkAuth();
+    // GAS ช้าต่อครั้ง (วัดได้ 1-30 วิ) จึงตรวจรหัสกับโหลดข้อมูลเต็มในคำขอเดียว แทน checkAuth แล้วค่อยโหลด
+    const res = await GAS.getScoped({ level: 'full' });
     btn.disabled = false; btn.innerHTML = orig;
 
-    if (res.ok && res.level === 'staff') {
+    if (res.ok && res.grant === 'staff') {
       currentScreen = 'staff';
-      render();
-      refreshData('full'); // เจ้าหน้าที่ต้องเห็นข้อมูลเต็มรูปแบบเสมอ
+      refreshData('full', Promise.resolve(res));
     } else {
       authCredential = null;
-      errEl.classList.remove('hidden');
+      if (res.ok) errEl.classList.remove('hidden');
+      else showToast('❌ เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองอีกครั้ง', 'error');
     }
   };
   document.getElementById('password').onkeydown = e => {
@@ -2710,11 +2712,13 @@ function openPinForm_(message) {
 
 // ─── รายชื่อ PIN ในการ์ดจัดการ PIN (หน้าเจ้าหน้าที่) ───
 // null = ยังไม่โหลด; ชื่อมาจากที่เจ้าหน้าที่พิมพ์ จึงใส่ผ่าน textContent ไม่ใช้ innerHTML
-let pinListState = null;
+let pinListState = null, pinListLoading = false;
 const PIN_ROLE_LABEL = { plan: 'ตัดแผน', receive: 'รับเอกสาร' };
 
 async function loadPinList_() {
+  pinListLoading = true;
   const res = await GAS.listPins();
+  pinListLoading = false;
   pinListState = res.ok ? res.pins : [];
   if (!res.ok) showToast('❌ โหลดรายชื่อ PIN ไม่สำเร็จ', 'error');
   renderPinList_();
@@ -2914,7 +2918,20 @@ function attachStaffHandlers() {
       loadPinList_();
     } else showToast('❌ บันทึก PIN ไม่สำเร็จ: ' + (res.error || ''), 'error');
   };
-  if (pinListState === null) loadPinList_(); else renderPinList_();
+  renderPinList_();
+  // โหลดรายชื่อ PIN เมื่อเลื่อนถึงการ์ด ไม่แย่ง GAS กับการโหลดข้อมูลตอนเข้าหน้า
+  const pinBox = document.getElementById('pinList');
+  if (pinListState === null && pinBox) {
+    if (!('IntersectionObserver' in window)) loadPinList_();
+    else {
+      const io = new IntersectionObserver(entries => {
+        if (!entries.some(e => e.isIntersecting)) return;
+        io.disconnect();
+        if (pinListState === null && !pinListLoading) loadPinList_();
+      });
+      io.observe(pinBox);
+    }
+  }
   document.getElementById('manageAnnBtn').onclick  = () => showAnnManageModal();
   document.getElementById('importDataBtn').onclick = () => {
     showToast('🔄 กำลังรีเฟรชข้อมูล...');
