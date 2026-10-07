@@ -284,7 +284,9 @@ const GAS = {
   pinLogin(obj)      { return this._call('pinLogin', obj); },
   setPin(obj)        { return this._call('setPin', obj); },
   getQueue(obj)      { return this._call('getQueue', obj); },
-  advanceStatus(obj) { return this._call('advanceStatus', obj); }
+  advanceStatus(obj) { return this._call('advanceStatus', obj); },
+  previewStatement(obj) { return this._call('previewStatement', obj); },
+  applyStatement(obj)   { return this._call('applyStatement', obj); }
 };
 
 // ============================================================
@@ -1126,6 +1128,157 @@ function handleBudgetUpload_(file) {
   rd.readAsArrayBuffer(file);
 }
 
+// ─── statement ธนาคาร → เงินเข้าจาก GFMIS → เอกสารสถานะ 5 ───
+// อ่านไฟล์ในเครื่อง ส่งไป GAS เฉพาะรายการเงินเข้า (วันที่ เวลา ยอด) ไม่ส่งทั้งไฟล์ GAS จับคู่กับใบ ขบ02 และตั้ง deposit_key เอง
+const STATEMENT_ACCOUNT = '150-6-00538-1';
+const STATEMENT_HIDDEN_KEY = 'fdt_statement_hidden_v1';
+
+// คืน [{date:'YYYY-MM-DD', time:'HH:MM:SS', amount_satang}] ตามลำดับในไฟล์ เฉพาะคำอธิบายขึ้นต้น GFMIS/ และยอดเป็นบวก
+function statementDeposits_(wb) {
+  const ws = wb.Sheets[STATEMENT_ACCOUNT];
+  if (!ws) throw new Error('ไม่พบชีตบัญชี ' + STATEMENT_ACCOUNT + ' ในไฟล์นี้');
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+  const h = rows.findIndex(r => String(r[0]).trim() === 'Date');
+  if (h === -1) throw new Error('ไม่พบหัวตาราง Date ในชีต ' + STATEMENT_ACCOUNT);
+  const col = name => rows[h].findIndex(c => String(c).trim() === name);
+  const [cDate, cDesc, cAmount] = ['Date', 'Description', 'Amount'].map(col);
+  const out = [];
+  rows.slice(h + 1).forEach((r, i) => {
+    const amount = Number(String(r[cAmount]).replace(/,/g, ''));
+    if (!String(r[cDesc]).startsWith('GFMIS/') || !(amount > 0)) return;
+    const m = String(r[cDate]).trim().match(/^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}:\d{2}:\d{2})$/);
+    if (!m) throw new Error('อ่านวันที่แถวที่ ' + (h + i + 2) + ' ไม่ได้: ' + r[cDate]);
+    out.push({ date: `${m[3]}-${m[2]}-${m[1]}`, time: m[4], amount_satang: Math.round(amount * 100) });
+  });
+  return out;
+}
+
+async function handleStatementUpload_(file) {
+  try {
+    showToast('⏳ กำลังอ่าน statement...');
+    await ensureXLSX_();
+    const deposits = statementDeposits_(XLSX.read(await file.arrayBuffer(), { type: 'array' }));
+    if (!deposits.length) { showToast('❌ ไม่พบเงินเข้าจาก GFMIS ในไฟล์นี้', 'error'); return; }
+    const res = await GAS.previewStatement({ deposits });
+    if (!res.ok) { showToast('❌ จับคู่ไม่สำเร็จ: ' + (res.error || ''), 'error'); return; }
+    showStatementModal_(res);
+  } catch (err) { showToast('❌ ' + err.message, 'error'); }
+}
+
+const baht_ = satang => (satang / 100).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const depositWhen_ = d => formatThaiDate(d.date + 'T00:00:00') + ' เวลา ' + d.time;
+
+function showStatementModal_(p) {
+  const font = `font-family:${CONFIG.font_family};color:${CONFIG.text_color};`;
+  const small = `font-size:${CONFIG.font_size * .8}px;`;
+  const box = `background-color:${CONFIG.background_color};`;
+  const hidden = new Set(cacheGet_(STATEMENT_HIDDEN_KEY) || []);
+  let showHidden = false;
+  const chooseCount = p.choose.reduce((n, g) => n + g.deposits.length, 0);
+
+  const autoRows = p.auto.map(a => `
+    <div class="flex items-center gap-2 px-3 py-2 rounded-lg" style="${box}">
+      <div class="flex-1 min-w-0"><p class="font-bold truncate" style="${font}">${escHtml_(a.document_number || a.kb02_no)}</p>
+        <p class="truncate opacity-60" style="${font}${small}">${escHtml_(a.title)}</p></div>
+      <span class="font-bold whitespace-nowrap" style="${font}">${baht_(a.amount_satang)}</span>
+    </div>`).join('');
+
+  const chooseGroups = p.choose.map((g, gi) => `
+    <div class="p-3 rounded-xl space-y-2" style="${box}">
+      <p class="font-bold" style="${font}">${baht_(g.amount_satang)} บาท · เงินเข้า ${g.deposits.length} รายการ · มี ${g.candidates.length} ใบให้เลือก</p>
+      ${g.deposits.map(d => `
+        <label class="block">
+          <span class="opacity-60" style="${font}${small}">เงินเข้า ${escHtml_(depositWhen_(d))}</span>
+          <select class="stmt-choose w-full px-3 py-2 rounded-lg border-2" data-group="${gi}" data-key="${escHtml_(d.deposit_key)}" style="${font}border-color:${CONFIG.primary_color};background:${CONFIG.surface_color};max-width:100%;">
+            <option value="">— ยังไม่เลือก —</option>
+            ${g.candidates.map(c => `<option value="${escHtml_(c.kb02_no)}">${escHtml_([c.document_number, c.title].filter(Boolean).join(' · '))} (ขบ02 ${escHtml_(c.kb02_no)})</option>`).join('')}
+          </select>
+        </label>`).join('')}
+    </div>`).join('');
+
+  const unmatchedHtml = () => {
+    const shown = p.unmatched.filter(d => showHidden || !hidden.has(d.deposit_key));
+    const nHidden = p.unmatched.filter(d => hidden.has(d.deposit_key)).length;
+    return shown.map(d => `
+      <div class="flex items-center gap-2 px-3 py-2 rounded-lg" style="${box}${hidden.has(d.deposit_key) ? 'opacity:.5;' : ''}">
+        <div class="flex-1 min-w-0"><p class="font-bold" style="${font}">${baht_(d.amount_satang)} บาท</p>
+          <p class="opacity-60" style="${font}${small}">${escHtml_(depositWhen_(d))}</p></div>
+        <button class="stmt-hide px-3 py-2 rounded-lg font-bold" data-key="${escHtml_(d.deposit_key)}" style="${font}${small}background:${CONFIG.surface_color};">${hidden.has(d.deposit_key) ? 'เลิกซ่อน' : 'ซ่อน'}</button>
+      </div>`).join('') + (nHidden ? `<button id="stmtShowHidden" class="w-full py-2 rounded-lg" style="${font}${small}">${showHidden ? 'ไม่แสดงที่ซ่อนไว้' : `แสดงที่ซ่อนไว้ (${nHidden})`}</button>` : '');
+  };
+  const visibleUnmatched = () => p.unmatched.filter(d => !hidden.has(d.deposit_key)).length;
+
+  const section = (title, body) => `<p class="font-bold mb-2 mt-3" style="${font}">${title}</p>${body}`;
+  const modal = document.createElement('div');
+  modal.id = 'statementModal';
+  modal.className = 'fixed inset-0 flex items-center justify-center z-50 p-4';
+  modal.style.backgroundColor = 'rgba(0,0,0,0.7)';
+  modal.innerHTML = `
+    <div class="rounded-2xl w-full max-w-lg card-animate" style="background-color:${CONFIG.surface_color};max-height:90vh;display:flex;flex-direction:column;">
+      <div class="flex justify-between items-center p-4">
+        <h3 class="font-bold" style="${font}font-size:${CONFIG.font_size * 1.2}px;">🏦 เงินเข้าจาก statement</h3>
+        <button id="closeStatement" class="text-3xl leading-none" style="${font}opacity:.4;">&times;</button>
+      </div>
+      <div class="px-4" style="overflow-y:auto;flex:1;min-height:0;">
+        ${p.already ? `<p class="opacity-60 mb-2" style="${font}${small}">บันทึกไปแล้วจากการอัปโหลดครั้งก่อน ${p.already} รายการ</p>` : ''}
+        ${chooseGroups ? section(`👉 ยอดซ้ำ เลือกเอกสารให้ตรง (${chooseCount} รายการ)`, `<div class="space-y-2">${chooseGroups}</div>`) : ''}
+        ${section(`✅ จับคู่ได้ ${p.auto.length} รายการ`, p.auto.length ? `<div class="space-y-2">${autoRows}</div>` : `<p class="opacity-60" style="${font}${small}">ไม่มีรายการใหม่</p>`)}
+        ${p.unmatched.length ? `<details id="stmtUnmatched" class="mt-3 mb-3"><summary class="font-bold" style="${font}cursor:pointer;">❔ ไม่พบคู่ <span id="stmtUnmatchedCount">${visibleUnmatched()}</span> รายการ</summary>
+          <p class="opacity-60 mt-2 mb-2" style="${font}${small}">เงินเข้าที่ไม่ตรงกับใบ ขบ02 ใบไหน กดซ่อนรายการที่ไม่ต้องตามได้</p>
+          <div id="stmtUnmatchedList" class="space-y-2">${unmatchedHtml()}</div></details>` : ''}
+      </div>
+      <div class="p-4">
+        <button id="statementConfirm" class="w-full py-3 rounded-xl font-bold text-white btn-hover" style="font-family:${CONFIG.font_family};background:linear-gradient(135deg,${CONFIG.primary_color},${CONFIG.accent_color});"></button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  const selects = [...modal.querySelectorAll('.stmt-choose')];
+  const pairs = () => p.auto.map(a => ({ deposit_key: a.deposit_key, kb02_no: a.kb02_no }))
+    .concat(selects.filter(s => s.value).map(s => ({ deposit_key: s.dataset.key, kb02_no: s.value })));
+  const confirmBtn = modal.querySelector('#statementConfirm');
+  const syncConfirm = () => {
+    const n = pairs().length;
+    confirmBtn.disabled = !n;
+    confirmBtn.style.opacity = n ? '' : '.5';
+    confirmBtn.textContent = n ? `✅ ยืนยัน ${n} รายการ` : 'ไม่มีรายการให้ยืนยัน';
+  };
+  // ใบเดียวกันเลือกให้เงินเข้าได้รายการเดียว
+  selects.forEach(sel => sel.onchange = () => {
+    const group = selects.filter(s => s.dataset.group === sel.dataset.group);
+    const taken = new Set(group.map(s => s.value).filter(Boolean));
+    group.forEach(s => [...s.options].forEach(o => { o.disabled = !!o.value && o.value !== s.value && taken.has(o.value); }));
+    syncConfirm();
+  });
+  const wireUnmatched = () => {
+    const list = modal.querySelector('#stmtUnmatchedList');
+    if (!list) return;
+    list.innerHTML = unmatchedHtml();
+    modal.querySelector('#stmtUnmatchedCount').textContent = visibleUnmatched();
+    list.querySelectorAll('.stmt-hide').forEach(b => b.onclick = () => {
+      hidden.has(b.dataset.key) ? hidden.delete(b.dataset.key) : hidden.add(b.dataset.key);
+      cacheSet_(STATEMENT_HIDDEN_KEY, [...hidden]);
+      wireUnmatched();
+    });
+    const toggle = list.querySelector('#stmtShowHidden');
+    if (toggle) toggle.onclick = () => { showHidden = !showHidden; wireUnmatched(); };
+  };
+  wireUnmatched();
+  syncConfirm();
+
+  modal.querySelector('#closeStatement').onclick = () => modal.remove();
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  confirmBtn.onclick = async () => {
+    confirmBtn.disabled = true;
+    confirmBtn.innerHTML = '<span class="spinner"></span>กำลังบันทึก...';
+    const res = await GAS.applyStatement({ pairs: pairs() });
+    if (!res.ok) { showToast('❌ บันทึกไม่สำเร็จ: ' + (res.error || ''), 'error'); syncConfirm(); return; }
+    modal.remove();
+    showToast(`✅ เลื่อนเป็นสถานะ 5 แล้ว ${res.moved.length} ฉบับ` + (res.skipped.length ? ` (ข้าม ${res.skipped.length} รายการ)` : ''));
+    refreshData();
+  };
+}
+
 // โดนัทงบประมาณแบบ conic-gradient (ไม่ต้องใช้ไลบรารีกราฟ) — ใช้ไปกี่ % แยกตามหมวด
 function buildBudgetDonut_() {
   const S = BUDGET_SUMMARY;
@@ -1604,6 +1757,7 @@ function renderStatusSummary(isStaff) {
   const extraBtns = isStaff ? `
     ${budgetBtnHtml}
     ${budgetUploadHtml}
+    <button id="statementBtn" class="${xbtn}" style="font-family:${CONFIG.font_family};background:linear-gradient(135deg,#16a34a,#15803d);">🏦 อัปโหลด statement</button><input type="file" id="statementFile" accept=".xls,.xlsx" hidden>
     <button id="manageAnnBtn" class="${xbtn}" style="font-family:${CONFIG.font_family};background:linear-gradient(135deg,#8b5cf6,#6366f1);">📢 จัดการประกาศ</button>
     <button id="importDataBtn" class="${xbtn}" style="font-family:${CONFIG.font_family};background:linear-gradient(135deg,#10b981,#059669);">🔄 รีเฟรช</button>
     <button id="summaryBtn"    class="${xbtn}" style="font-family:${CONFIG.font_family};background:linear-gradient(135deg,${CONFIG.accent_color},${CONFIG.primary_color});">📸 รายงานสรุป</button>`
@@ -2679,6 +2833,11 @@ function attachStaffHandlers() {
   if (upBtn && upFile) {
     upBtn.onclick = () => upFile.click();
     upFile.onchange = e => { const f = e.target.files[0]; if (f) handleBudgetUpload_(f); e.target.value = ''; };
+  }
+  const stBtn = document.getElementById('statementBtn'), stFile = document.getElementById('statementFile');
+  if (stBtn && stFile) {
+    stBtn.onclick = () => stFile.click();
+    stFile.onchange = e => { const f = e.target.files[0]; if (f) handleStatementUpload_(f); e.target.value = ''; };
   }
   document.getElementById('pinMgrSave').onclick = async () => {
     const name = document.getElementById('pinMgrName').value.trim();
