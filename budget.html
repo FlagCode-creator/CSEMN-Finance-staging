@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>[ระบบทดลอง] งบประมาณ 2569</title>
+<meta name="description" content="แดชบอร์ดยอดงบประมาณตามหมวด ปีงบ 2569">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=Sarabun:wght@400;500;600;700;800&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --bg:#eef3fb; --panel:#ffffff; --panel-2:#f4f8fe; --line:#dde8f6;
+    --ink:#12294a; --ink-2:#43597a; --ink-3:#8298b4;
+    --brand:#2f7bf5; --brand-2:#17c3d4;
+    --c-invest:#ff9f43; --c-subsidy:#17c3d4; --c-personnel:#ff6b9d; --c-other:#9b6dff; --c-operate:#2fd18f;
+    --good:#12b886; --crit:#ff5c7a;
+    --shadow:0 10px 28px rgba(23,54,102,.10), 0 2px 6px rgba(23,54,102,.05);
+    --radius:22px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0a1424; --panel:#101f37; --panel-2:#16294300; --line:#243a54;
+      --ink:#eaf1fb; --ink-2:#adc2dd; --ink-3:#71899f;
+      --brand:#5b9bff; --brand-2:#38d6e6;
+      --c-invest:#ffb168; --c-subsidy:#2ad4e4; --c-personnel:#ff86b0; --c-other:#b48bff; --c-operate:#4fdca4;
+      --good:#34d399; --crit:#ff7a92;
+      --shadow:0 16px 44px rgba(0,0,0,.5), 0 2px 6px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0a1424; --panel:#101f37; --panel-2:#162943; --line:#243a54;
+    --ink:#eaf1fb; --ink-2:#adc2dd; --ink-3:#71899f;
+    --brand:#5b9bff; --brand-2:#38d6e6;
+    --c-invest:#ffb168; --c-subsidy:#2ad4e4; --c-personnel:#ff86b0; --c-other:#b48bff; --c-operate:#4fdca4;
+    --good:#34d399; --crit:#ff7a92;
+    --shadow:0 16px 44px rgba(0,0,0,.5), 0 2px 6px rgba(0,0,0,.35);
+  }
+  /* fix: ensure dark panel-2 has real value (guard the typo-safe default) */
+  :root[data-theme="dark"]{ --panel-2:#162943; }
+
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);font-family:'Sarabun',system-ui,sans-serif;font-variant-numeric:tabular-nums;margin:0;line-height:1.5}
+  .wrap{max-width:1180px;margin-inline:auto;padding-inline:16px;padding-block:26px 56px}
+  h1,h2,h3,.disp{font-family:'IBM Plex Sans Thai','Sarabun',sans-serif}
+  .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+
+  .head{display:flex;flex-wrap:wrap;gap:16px 24px;align-items:flex-end;justify-content:space-between;margin-bottom:18px}
+  .eyebrow{font-size:.8rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--brand);margin:0 0 6px}
+  h1{font-size:clamp(1.7rem,4.4vw,2.5rem);font-weight:700;margin:0;letter-spacing:-.01em;text-wrap:balance}
+  .sub{color:var(--ink-2);font-size:.96rem;margin:8px 0 0}
+  .yr{display:inline-flex;align-items:center;gap:8px;background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff;padding:10px 18px;border-radius:999px;font-weight:700;font-family:'IBM Plex Sans Thai',sans-serif;box-shadow:var(--shadow)}
+  .yr small{font-weight:500;opacity:.85;font-size:.72rem;letter-spacing:.04em}
+
+  /* upload bar */
+  .uploadbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;background:var(--panel);border:1px dashed var(--line);
+    border-radius:16px;padding:12px 16px;margin-bottom:20px;box-shadow:var(--shadow)}
+  .uploadbar .ic{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;font-size:1.2rem;
+    background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff;flex:none}
+  .uploadbar .txt{flex:1;min-width:180px}
+  .uploadbar .txt b{font-family:'IBM Plex Sans Thai',sans-serif;font-size:.95rem}
+  .uploadbar .txt p{margin:2px 0 0;font-size:.8rem;color:var(--ink-3)}
+  .btn{font-family:'IBM Plex Sans Thai',sans-serif;font-weight:700;font-size:.9rem;border:none;cursor:pointer;
+    color:#fff;background:linear-gradient(135deg,var(--brand),var(--brand-2));padding:11px 20px;border-radius:12px;
+    box-shadow:var(--shadow);transition:transform .15s}
+  .btn:hover{transform:translateY(-1px)} .btn:active{transform:translateY(0)}
+  .btn:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+  .kpi .cap{font-size:.82rem;color:var(--ink-2);font-weight:600;margin:0 0 8px;display:flex;align-items:center;gap:7px}
+  .kpi .val{font-family:'IBM Plex Sans Thai',sans-serif;font-weight:700;font-size:clamp(1.2rem,2.7vw,1.7rem);letter-spacing:-.01em;line-height:1.1}
+  .kpi .val small{font-size:.6em;font-weight:600;color:var(--ink-3);margin-left:3px}
+  .kpi .foot{font-size:.8rem;color:var(--ink-3);margin-top:6px}
+  .kpi .dot{width:10px;height:10px;border-radius:50%}
+  .kpi.accent::after{content:"";position:absolute;inset:0 auto 0 0;width:5px;background:linear-gradient(var(--brand),var(--brand-2))}
+
+  .grid2{display:grid;grid-template-columns:1.32fr 1fr;gap:16px;margin-bottom:16px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px 22px}
+  .panel h2{font-size:1.12rem;font-weight:700;margin:0 0 2px;letter-spacing:-.01em}
+  .panel .note{color:var(--ink-3);font-size:.84rem;margin:0 0 4px}
+  .chart{width:100%;height:340px}
+  .chart.sm{height:300px}
+
+  .breakdown{display:flex;flex-direction:column;gap:12px;margin-top:8px}
+  .row{display:grid;grid-template-columns:1fr auto;gap:6px 12px;align-items:center}
+  .row .name{display:flex;align-items:center;gap:9px;font-weight:600;font-size:.94rem;min-width:0}
+  .row .name .sw{width:13px;height:13px;border-radius:5px;flex:none;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+  .row .name .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .name .cnt{color:var(--ink-3);font-weight:500;font-size:.8rem}
+  .bar{grid-column:1 / -1;height:9px;border-radius:99px;background:var(--panel-2);overflow:hidden;box-shadow:inset 0 1px 2px rgba(0,0,0,.1)}
+  .bar > i{display:block;height:100%;border-radius:99px}
+  .row .amt{text-align:right;white-space:nowrap;font-size:.92rem}
+  .row .amt .pct{font-size:.78rem;color:var(--ink-3);margin-left:6px}
+  .over{color:var(--crit);font-weight:700}
+  .tag-over{display:inline-block;font-size:.68rem;font-weight:700;color:#fff;background:var(--crit);padding:1px 7px;border-radius:99px;margin-left:6px}
+
+  .tablewrap{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+  .tablewrap .top{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding:18px 22px 12px}
+  .tablewrap h2{margin:0;font-size:1.12rem;font-weight:700}
+  .chips{display:flex;flex-wrap:wrap;gap:7px}
+  .chip{border:1px solid var(--line);background:var(--panel-2);color:var(--ink-2);font-size:.8rem;font-weight:600;padding:6px 12px;border-radius:99px;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:7px;transition:.15s}
+  .chip .sw{width:10px;height:10px;border-radius:3px}
+  .chip[aria-pressed="true"]{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+  .chip:focus-visible,.sortbtn:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+  .scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;min-width:640px;font-size:.9rem}
+  thead th{position:sticky;top:0;background:var(--panel-2);color:var(--ink-2);font-weight:600;text-align:right;padding:11px 16px;font-size:.82rem;white-space:nowrap;border-bottom:1px solid var(--line)}
+  thead th:first-child{text-align:left}
+  .sortbtn{background:none;border:none;color:inherit;font:inherit;font-weight:600;cursor:pointer;padding:0;display:inline-flex;gap:4px;align-items:center}
+  tbody td{padding:10px 16px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+  tbody td:first-child{text-align:left;white-space:normal;min-width:230px}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover td{background:var(--panel-2)}
+  .cellname{display:flex;align-items:center;gap:9px}
+  .cellname .sw{width:11px;height:11px;border-radius:3px;flex:none}
+  .cellname .cy{font-size:.68rem;color:var(--ink-3);border:1px solid var(--line);border-radius:5px;padding:0 5px;flex:none}
+  .minibar{display:inline-block;width:58px;height:7px;border-radius:99px;background:var(--panel-2);overflow:hidden;vertical-align:middle;margin-left:8px}
+  .minibar > i{display:block;height:100%;border-radius:99px}
+  .tfoot td{font-weight:700;background:var(--panel-2);border-top:2px solid var(--line);font-family:'IBM Plex Sans Thai',sans-serif}
+  .foot-note{color:var(--ink-3);font-size:.82rem;margin-top:18px;text-align:center}
+  @media (max-width:820px){ .kpis{grid-template-columns:repeat(2,1fr)} .grid2{grid-template-columns:1fr} }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body><div style="position:fixed;left:8px;bottom:8px;z-index:99999;background:#dc2626;color:#fff;padding:4px 12px;border-radius:9999px;font:600 13px sans-serif;pointer-events:none">ระบบทดลอง</div>
+
+<div class="wrap">
+  <a href="index.html" style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;font-family:'IBM Plex Sans Thai',sans-serif;font-weight:600;color:var(--brand);background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:8px 16px;margin-bottom:16px;box-shadow:var(--shadow);">← กลับหน้าหลัก</a>
+  <header class="head">
+    <div>
+      <p class="eyebrow">วิทยาลัยเสริมทักษะพระภิกษุ สามเณร</p>
+      <h1>ยอดงบประมาณตามหมวด</h1>
+      <p class="sub">รายงาน NFMA55 · หน่วยรับงบ 2000600474 · พื้นที่พระนครศรีอยุธยา</p>
+    </div>
+    <div class="yr">ปีงบประมาณ <span class="num">2569</span></div>
+  </header>
+
+  <p id="srcNote" style="color:var(--ink-3);font-size:.85rem;margin:0 0 18px;">ข้อมูล ณ 16 ก.ย. 2569</p>
+
+  <section class="kpis" id="kpis"></section>
+
+  <section class="grid2">
+    <div class="panel">
+      <h2>งบประมาณจำแนกตามหมวด</h2>
+      <p class="note">สัดส่วนวงเงินที่ได้รับจัดสรร แยกตามประเภทงบรายจ่าย</p>
+      <div id="donutCat" class="chart"></div>
+      <div class="breakdown" id="breakdown"></div>
+    </div>
+    <div class="panel">
+      <h2>ภาพรวมการเบิกจ่าย</h2>
+      <p class="note">เบิกจ่ายแล้วเทียบกับวงเงินทั้งหมด</p>
+      <div id="donutUse" class="chart sm"></div>
+      <div class="breakdown" id="useLegend"></div>
+    </div>
+  </section>
+
+  <section class="tablewrap">
+    <div class="top">
+      <h2>รายการงบประมาณทั้งหมด <span class="num" id="rowcount" style="color:var(--ink-3);font-weight:500;font-size:.9rem"></span></h2>
+      <div class="chips" id="chips"></div>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th><button class="sortbtn" data-k="n">รายการงบประมาณ</button></th>
+          <th><button class="sortbtn" data-k="b">งบที่ได้รับ ▾</button></th>
+          <th><button class="sortbtn" data-k="u">เบิกจ่าย</button></th>
+          <th><button class="sortbtn" data-k="r">คงเหลือ</button></th>
+          <th><button class="sortbtn" data-k="p">% เบิกจ่าย</button></th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+        <tfoot><tr class="tfoot" id="tfoot"></tr></tfoot>
+      </table>
+    </div>
+  </section>
+
+  <p class="foot-note">จัดกลุ่มหมวดจากรหัสแหล่งของเงิน · ตัวเลขเป็นบาท · อัปเดตข้อมูลผ่านปุ่ม “อัปโหลดงบ (Excel)” ในระบบเจ้าหน้าที่</p>
+</div>
+
+<script>
+const INITIAL = [{"n":"ค่าใช้จ่ายโครงการอาชีวะต้านยาเสพติด","c":"รายจ่ายอื่น","b":20000,"u":20000,"carry":false},{"n":"รายการงบบุคลากร","c":"บุคลากร","b":1584540,"u":1614910,"carry":false},{"n":"รายการงบดำเนินงาน (รายจ่ายประจำ)","c":"ดำเนินงาน","b":62403,"u":55500,"carry":false},{"n":"เงินอุดหนุนทุนการศึกษาเฉลิมราชกุมารี","c":"เงินอุดหนุน","b":110000,"u":82500,"carry":false},{"n":"ค่าใช้จ่ายโครงการยกระดับและพัฒนาขีดความสามารถด้านภาษาและทักษะดิจิทัล","c":"รายจ่ายอื่น","b":20000,"u":20000,"carry":false},{"n":"ค่าใช้จ่ายโครงการพัฒนาทักษะและสมรรถนะวิชาชีพกำลังคน (Up-skill, Re-skill)","c":"รายจ่ายอื่น","b":29960,"u":29960,"carry":true},{"n":"ค่าใช้จ่ายโครงการพัฒนาทักษะและสมรรถนะวิชาชีพกำลังคน (Reskill-Upskill-Newskill)","c":"รายจ่ายอื่น","b":300000,"u":69089.02,"carry":false},{"n":"เงินอุดหนุนโครงการสร้างองค์ความรู้ทางการอาชีวศึกษา","c":"เงินอุดหนุน","b":14000,"u":0,"carry":false},{"n":"ค่าใช้จ่ายโครงการพัฒนาศักยภาพผู้เรียนในการเป็นผู้ประกอบการ","c":"รายจ่ายอื่น","b":37000,"u":5700,"carry":false},{"n":"ค่าใช้จ่ายโครงการบูรณาการพัฒนาทักษะทางวิชาชีพกับการเสริมสร้างคุณลักษณะ","c":"รายจ่ายอื่น","b":120000,"u":45436,"carry":false},{"n":"ค่าใช้จ่ายโครงการส่งเสริมพัฒนาทักษะวิชาชีพ ทักษะพื้นฐาน","c":"รายจ่ายอื่น","b":10000,"u":0,"carry":false},{"n":"ค่าใช้จ่ายโครงการพัฒนาและยกระดับการติดตามผู้สำเร็จการศึกษา","c":"รายจ่ายอื่น","b":5000,"u":0,"carry":false},{"n":"ค่าใช้จ่ายโครงการเพิ่มประสิทธิภาพการบริหารจัดการศึกษา","c":"รายจ่ายอื่น","b":397440,"u":353636.13,"carry":false},{"n":"ค่าใช้จ่ายโครงการอาชีวศึกษาปลอดภัย","c":"รายจ่ายอื่น","b":10000,"u":0,"carry":false},{"n":"ค่าใช้จ่ายโครงการขยายและยกระดับการจัดอาชีวศึกษาระบบทวิภาคี","c":"รายจ่ายอื่น","b":391300,"u":210179.69,"carry":false},{"n":"เครื่องมือตรวจแบบไม่ทำลายด้วยอนุภาคแม่เหล็ก (AC Yoke)","c":"ลงทุน","b":99500,"u":99500,"carry":false},{"n":"เครื่องปรับอากาศ แบบแยกส่วน (รวมค่าติดตั้ง)","c":"ลงทุน","b":712200,"u":712200,"carry":false},{"n":"ปรับปรุงอาคาร วิทยาลัยฯ ต.บ้านเลน อ.บางปะอิน","c":"ลงทุน","b":5624771.64,"u":5624771.64,"carry":true},{"n":"ต่อเติมอาคารชั้นดาดฟ้า อาคารฝึกงาน","c":"ลงทุน","b":4680000,"u":4680000,"carry":false},{"n":"ค่าใช้จ่ายโครงการอนุรักษ์พันธุกรรมพืชอันเนื่องมาจากพระราชดำริ","c":"รายจ่ายอื่น","b":12000,"u":12000,"carry":false},{"n":"ค่าใช้จ่ายโครงการจัดหาบุคลากรสนับสนุนเพื่อคืนครูให้นักเรียน","c":"รายจ่ายอื่น","b":117600,"u":58800,"carry":false},{"n":"รายการงบดำเนินงาน (รายจ่ายประจำ) — ก้อน 1","c":"ดำเนินงาน","b":870200,"u":615562.29,"carry":false},{"n":"รายการงบดำเนินงาน (รายจ่ายประจำ) — ก้อน 2","c":"ดำเนินงาน","b":111260,"u":51558.97,"carry":false},{"n":"รายการงบดำเนินงาน (รายจ่ายประจำ) — ก้อน 3","c":"ดำเนินงาน","b":75603.9,"u":75603.9,"carry":true},{"n":"รายการงบดำเนินงาน (รายจ่ายประจำ) — ก้อน 4","c":"ดำเนินงาน","b":245400,"u":189307.41,"carry":false},{"n":"ค่าหนังสือเรียน","c":"เงินอุดหนุน","b":83000,"u":59466,"carry":false},{"n":"ค่าอุปกรณ์การเรียน","c":"เงินอุดหนุน","b":20020,"u":20020,"carry":false},{"n":"ค่าเครื่องแบบนักเรียน","c":"เงินอุดหนุน","b":39900,"u":39900,"carry":false},{"n":"ค่ากิจกรรมพัฒนาคุณภาพผู้เรียน","c":"เงินอุดหนุน","b":52290,"u":16831,"carry":false},{"n":"ค่าจัดการเรียนการสอน","c":"เงินอุดหนุน","b":1504699.84,"u":503961.84,"carry":false},{"n":"ค่าใช้จ่ายโครงการเสริมสร้างคุณธรรม จริยธรรมและธรรมาภิบาล","c":"รายจ่ายอื่น","b":15000,"u":15000,"carry":false},{"n":"ค่าใช้จ่ายในการควบคุมและจัดการเลือกตั้ง ส.ส.","c":"ดำเนินงาน","b":5000,"u":5000,"carry":false}];
+
+const CATS = [
+  {key:'ลงทุน',      label:'งบลงทุน',       col:'#ff9f43', g:['#ffbe7d','#ff9f43']},
+  {key:'เงินอุดหนุน', col2:1, label:'งบเงินอุดหนุน', col:'#17c3d4', g:['#5fd8e4','#17c3d4']},
+  {key:'บุคลากร',    label:'งบบุคลากร',      col:'#ff6b9d', g:['#ff9ec0','#ff6b9d']},
+  {key:'รายจ่ายอื่น', label:'งบรายจ่ายอื่น',  col:'#9b6dff', g:['#c0a3ff','#9b6dff']},
+  {key:'ดำเนินงาน',  label:'งบดำเนินงาน',    col:'#2fd18f', g:['#74e3b8','#2fd18f']},
+];
+const CATBY = Object.fromEntries(CATS.map(c=>[c.key,c]));
+const cv = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const baht = n => (n||0).toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2});
+const shortB = n => Math.abs(n)>=1e6 ? (n/1e6).toFixed(2)+' ล.บาท' : n.toLocaleString('th-TH');
+
+// ----- state -----
+let ITEMS=[], agg=[], TB=0, TU=0, TR=0, usePct=0;
+let filter='all', sortK='b', sortDir=-1;
+let chartCat, chartUse;
+
+function recompute(){
+  agg = CATS.map(c=>{
+    const rows = ITEMS.filter(i=>i.c===c.key);
+    const b = rows.reduce((s,i)=>s+i.b,0), u = rows.reduce((s,i)=>s+i.u,0);
+    return {...c, b, u, r:b-u, n:rows.length};
+  }).filter(c=>c.n>0).sort((a,b)=>b.b-a.b);
+  TB = agg.reduce((s,x)=>s+x.b,0); TU = agg.reduce((s,x)=>s+x.u,0); TR = TB-TU;
+  usePct = TB ? TU/TB*100 : 0;
+}
+
+function renderKPIs(){
+  document.getElementById('kpis').innerHTML = [
+    {cap:'💰 งบประมาณทั้งหมด', val:baht(TB), unit:'บาท', foot:`${ITEMS.length} รายการ · ${agg.length} หมวด`, accent:true},
+    {cap:'📤 เบิกจ่ายแล้ว', val:baht(TU), unit:'บาท', foot:`คิดเป็น ${usePct.toFixed(1)}% ของวงเงิน`, dot:cv('--brand')},
+    {cap:'🏦 คงเหลือ', val:baht(TR), unit:'บาท', foot:`เบิกได้อีก ${(100-usePct).toFixed(1)}%`, dot:cv('--good')},
+    {cap:'📊 อัตราเบิกจ่าย', val:usePct.toFixed(1), unit:'%', foot:usePct>=85?'อยู่ในเกณฑ์ดี':'ต่ำกว่าเป้า'},
+  ].map(k=>`<div class="kpi ${k.accent?'accent':''}"><p class="cap">${k.dot?`<span class="dot" style="background:${k.dot}"></span>`:''}${k.cap}</p><div class="val num">${k.val}<small>${k.unit}</small></div><p class="foot">${k.foot}</p></div>`).join('');
+}
+function renderBreakdown(){
+  document.getElementById('breakdown').innerHTML = agg.map(c=>{
+    const p = c.b?c.u/c.b*100:0, over = c.r<0;
+    return `<div class="row">
+      <div class="name"><span class="sw" style="background:${c.col}"></span><span class="n">${c.label}</span><span class="cnt">· ${c.n} รายการ</span>${over?'<span class="tag-over">เกินงบ</span>':''}</div>
+      <div class="amt"><b class="num">${baht(c.b)}</b><span class="pct num">${(TB?c.b/TB*100:0).toFixed(1)}%</span></div>
+      <div class="bar"><i style="width:${Math.min(p,100)}%;background:linear-gradient(90deg,${c.g[0]},${c.g[1]})"></i></div>
+    </div>`;
+  }).join('');
+}
+function renderUseLegend(){
+  document.getElementById('useLegend').innerHTML = `
+    <div class="row"><div class="name"><span class="sw" style="background:${cv('--brand')}"></span><span class="n">เบิกจ่ายแล้ว</span></div>
+      <div class="amt"><b class="num">${baht(TU)}</b><span class="pct num">${usePct.toFixed(1)}%</span></div></div>
+    <div class="row"><div class="name"><span class="sw" style="background:var(--line)"></span><span class="n">คงเหลือ</span></div>
+      <div class="amt"><b class="num">${baht(TR)}</b><span class="pct num">${(100-usePct).toFixed(1)}%</span></div></div>`;
+}
+
+// ----- donuts (สไตล์แบน กลมมน ป้าย % รอบวง) -----
+function centerText(chart, big, small){
+  const h = chart.getHeight()/2;
+  return [
+    {type:'text', left:'center', top:h-6, style:{text:small, fill:cv('--ink-3'), fontFamily:'Sarabun', fontSize:13, textAlign:'center'}},
+    {type:'text', left:'center', top:h+12, style:{text:big, fill:cv('--ink'), fontFamily:'IBM Plex Sans Thai', fontWeight:700, fontSize:24, textAlign:'center'}}
+  ];
+}
+function drawCat(){
+  const surface=cv('--panel'), ink=cv('--ink'), ink2=cv('--ink-2');
+  chartCat = chartCat || echarts.init(document.getElementById('donutCat'));
+  chartCat.setOption({
+    tooltip:{trigger:'item', backgroundColor:surface, borderColor:cv('--line'), textStyle:{color:ink,fontFamily:'Sarabun'},
+      formatter:p=>`<b>${p.name}</b><br/>${baht(p.value)} บาท · ${p.percent}%`},
+    series:[{
+      type:'pie', radius:['60%','86%'], center:['50%','46%'], startAngle:90, padAngle:4, avoidLabelOverlap:true,
+      itemStyle:{borderRadius:10, borderColor:surface, borderWidth:3},
+      label:{show:true, position:'outside', formatter:'{d}%', color:ink2, fontFamily:'IBM Plex Sans Thai', fontWeight:700, fontSize:13},
+      labelLine:{show:true, length:8, length2:10, lineStyle:{color:cv('--line'), width:1.5}},
+      emphasis:{scale:true, scaleSize:9, itemStyle:{shadowBlur:16, shadowColor:'rgba(20,40,80,.2)'}},
+      data: agg.map(c=>({name:c.label, value:c.b, itemStyle:{color:c.col}}))
+    }],
+    graphic: centerText(chartCat,'', '')
+  });
+  chartCat.setOption({graphic: centerText(chartCat, shortB(TB), 'งบประมาณทั้งหมด')});
+}
+function drawUse(){
+  const surface=cv('--panel'), ink=cv('--ink'), lineC=cv('--line');
+  chartUse = chartUse || echarts.init(document.getElementById('donutUse'));
+  chartUse.setOption({
+    tooltip:{trigger:'item', backgroundColor:surface, borderColor:lineC, textStyle:{color:ink,fontFamily:'Sarabun'},
+      formatter:p=>`<b>${p.name}</b><br/>${baht(p.value)} บาท · ${p.percent}%`},
+    series:[{
+      type:'pie', radius:['64%','86%'], center:['50%','50%'], startAngle:90, padAngle:3,
+      itemStyle:{borderRadius:10, borderColor:surface, borderWidth:3}, label:{show:false},
+      emphasis:{scale:true, scaleSize:8},
+      data:[
+        {name:'เบิกจ่ายแล้ว', value:TU, itemStyle:{color:cv('--brand')}},
+        {name:'คงเหลือ', value:Math.max(TR,0), itemStyle:{color:cv('--panel-2'), borderColor:lineC}}
+      ]
+    }],
+    graphic: centerText(chartUse, usePct.toFixed(1)+'%', 'เบิกจ่ายแล้ว')
+  });
+}
+function drawAll(){
+  if(typeof echarts==='undefined'){ document.getElementById('donutCat').innerHTML='<p style="color:var(--ink-3);text-align:center;padding:50px 12px">โหลดกราฟไม่ได้ (เชื่อมต่ออินเทอร์เน็ตแล้วรีเฟรช)</p>'; return; }
+  drawCat(); drawUse();
+}
+
+// ----- table -----
+function renderTable(){
+  const chipsWrap = document.getElementById('chips');
+  chipsWrap.innerHTML = `<button class="chip" data-f="all" aria-pressed="${filter==='all'}">ทุกหมวด</button>` +
+    agg.map(c=>`<button class="chip" data-f="${c.key}" aria-pressed="${filter===c.key}"><span class="sw" style="background:${c.col}"></span>${c.label}</button>`).join('');
+  chipsWrap.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{filter=b.dataset.f;renderTable();});
+
+  let rows = ITEMS.map(i=>({...i, r:i.b-i.u, p:i.b?i.u/i.b*100:0}));
+  if(filter!=='all') rows = rows.filter(r=>r.c===filter);
+  rows.sort((a,b)=> sortK==='n' ? a.n.localeCompare(b.n,'th')*(-sortDir) : (a[sortK]-b[sortK])*sortDir);
+
+  document.getElementById('rowcount').textContent = `(${rows.length} รายการ)`;
+  document.getElementById('tbody').innerHTML = rows.map(r=>{
+    const c = CATBY[r.c]||{col:'#94a3b8',g:['#94a3b8','#64748b']}, over=r.r<0;
+    return `<tr>
+      <td><div class="cellname"><span class="sw" style="background:${c.col}"></span><span>${r.n}${r.carry?' <span class="cy">เหลื่อมปี</span>':''}</span></div></td>
+      <td class="num">${baht(r.b)}</td><td class="num">${baht(r.u)}</td>
+      <td class="num ${over?'over':''}">${baht(r.r)}</td>
+      <td class="num">${r.p.toFixed(1)}%<span class="minibar"><i style="width:${Math.min(r.p,100)}%;background:linear-gradient(90deg,${c.g[0]},${c.g[1]})"></i></span></td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--ink-3);padding:26px">ไม่มีรายการ</td></tr>`;
+  const fb=rows.reduce((s,r)=>s+r.b,0), fu=rows.reduce((s,r)=>s+r.u,0);
+  document.getElementById('tfoot').innerHTML =
+    `<td>รวม${filter==='all'?'ทั้งหมด':' '+(CATBY[filter].label)}</td><td class="num">${baht(fb)}</td><td class="num">${baht(fu)}</td><td class="num ${fb-fu<0?'over':''}">${baht(fb-fu)}</td><td class="num">${(fb?fu/fb*100:0).toFixed(1)}%</td>`;
+}
+document.querySelectorAll('.sortbtn').forEach(b=>b.onclick=()=>{
+  const k=b.dataset.k; if(sortK===k) sortDir*=-1; else {sortK=k; sortDir = k==='n'?1:-1;}
+  document.querySelectorAll('.sortbtn').forEach(x=>x.textContent=x.textContent.replace(/ [▾▴]$/,''));
+  b.textContent += sortDir<0?' ▾':' ▴'; renderTable();
+});
+
+// ----- load / reload -----
+function loadData(items, srcLabel){
+  ITEMS = items; filter='all'; recompute();
+  renderKPIs(); renderBreakdown(); renderUseLegend(); drawAll(); renderTable();
+  if(srcLabel) document.getElementById('srcNote').textContent = 'กำลังแสดง: ' + srcLabel;
+}
+
+// ----- Excel upload -----
+const catMap = {'1':'บุคลากร','2':'ดำเนินงาน','3':'ลงทุน','4':'เงินอุดหนุน','5':'รายจ่ายอื่น'};
+function parseWorkbook(buf){
+  const wb = XLSX.read(buf, {type:'array'});
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:''});
+  const items = [];
+  for(const r of rows){
+    if(!r || r.length < 11) continue;
+    if(!/^\d{4}$/.test(String(r[0]).trim())) continue;      // แถวข้อมูล = คอลัมน์แรกเป็นปี
+    const name = String(r[3]||'').trim();
+    if(!name || name.charAt(0)==='*') continue;             // ข้ามแถวผลรวม
+    const src = String(r[4]||'');
+    const c = catMap[src.charAt(4)] || 'รายจ่ายอื่น';
+    const b = Number(r[8])||0, u = Number(r[9])||0;
+    if(b===0 && u===0) continue;
+    items.push({n:name, c, b, u, carry: src.slice(0,2)==='68'});
+  }
+  return items;
+}
+// หน้านี้อ่านอย่างเดียว — การอัปโหลด Excel ทำในระบบเจ้าหน้าที่ (index.html)
+
+// ----- theme + resize -----
+addEventListener('resize', ()=>{
+  if(chartCat){chartCat.resize(); chartCat.setOption({graphic:centerText(chartCat,shortB(TB),'งบประมาณทั้งหมด')});}
+  if(chartUse){chartUse.resize(); chartUse.setOption({graphic:centerText(chartUse,usePct.toFixed(1)+'%','เบิกจ่ายแล้ว')});}
+});
+const reobs = ()=>{ if(chartCat){chartCat.dispose();chartCat=null;} if(chartUse){chartUse.dispose();chartUse=null;} drawAll(); };
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', reobs);
+new MutationObserver(reobs).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+
+// ----- go: แสดงข้อมูลตั้งต้นก่อน แล้วดึงข้อมูลล่าสุดจาก GAS (ที่เจ้าหน้าที่อัปโหลดไว้) -----
+const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbyBD3nVMyWwfQeTf9ZxpWayLMHCsQSzzBEs7G6XvT24eAL9Eld9VM2sYGxp1PAYZGD49w/exec';
+loadData(INITIAL, 'ข้อมูล ณ 16 ก.ย. 2569');
+(async function(){
+  try{
+    const r = await fetch(GAS_API_URL + '?action=getBudget&_=' + Date.now());
+    const j = await r.json();
+    if(j && j.ok && j.budget && j.budget.items && j.budget.items.length){
+      loadData(j.budget.items, 'อัปเดตล่าสุด · ' + (j.budget.updated || ''));
+    }
+  }catch(e){ /* เชื่อมต่อ GAS ไม่ได้ — ใช้ข้อมูลตั้งต้นต่อไป */ }
+})();
+</script>
+</body>
+</html>
