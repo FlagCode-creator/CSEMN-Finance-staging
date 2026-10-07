@@ -355,7 +355,6 @@ function renderSafe_() {
     code: g('publicPasscode') ? g('publicPasscode').value : '',
     user: g('username') ? g('username').value : '',
     pw:   g('password') ? g('password').value : '',
-    pinName: g('pinName') ? g('pinName').value : '',
     pinCode: g('pinCode') ? g('pinCode').value : '',
     pinErr: isOpen('pinError') ? g('pinError').textContent : '',
     focus: document.activeElement ? document.activeElement.id : ''
@@ -370,7 +369,6 @@ function renderSafe_() {
   if (g('publicPasscode')) g('publicPasscode').value = st.code;
   if (g('username')) g('username').value = st.user;
   if (g('password')) g('password').value = st.pw;
-  if (g('pinName')) g('pinName').value = st.pinName;
   if (g('pinCode')) g('pinCode').value = st.pinCode;
   if (st.pinErr) { g('pinError').textContent = st.pinErr; g('pinError').classList.remove('hidden'); }
   if (st.focus && g(st.focus)) g(st.focus).focus();
@@ -1500,10 +1498,6 @@ function renderWelcome() {
                 <button id="loginPinBtn" class="w-full btn-hover py-3.5 rounded-xl font-bold" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size}px;color:${CONFIG.text_color};background-color:${CONFIG.background_color};">🔢 เข้าสู่ระบบด้วย PIN</button>
               </div>
               <div id="pinSection" class="hidden space-y-3">
-                <div>
-                  <label class="block font-bold mb-1.5" for="pinName" style="font-family:${CONFIG.font_family};font-size:16px;color:${CONFIG.text_color};">ชื่อ</label>
-                  <input type="text" id="pinName" autocomplete="name" class="w-full px-4 py-3 rounded-xl border-2" style="font-family:${CONFIG.font_family};font-size:16px;border-color:${CONFIG.primary_color};">
-                </div>
                 <div>
                   <label class="block font-bold mb-1.5" for="pinCode" style="font-family:${CONFIG.font_family};font-size:16px;color:${CONFIG.text_color};">PIN 6 หลัก</label>
                   <input type="password" id="pinCode" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" class="w-full px-4 py-3 rounded-xl border-2 text-center font-bold tracking-widest" style="font-family:${CONFIG.font_family};font-size:20px;border-color:${CONFIG.primary_color};">
@@ -2667,23 +2661,22 @@ function attachWelcomeHandlers() {
     if (e.key === 'Enter') document.getElementById('doLoginBtn').click();
   };
 
-  document.getElementById('loginPinBtn').onclick = () => openPinForm_('', '');
+  document.getElementById('loginPinBtn').onclick = () => openPinForm_('');
   document.getElementById('backFromPinBtn').onclick = () => {
     document.getElementById('pinSection').classList.add('hidden');
     document.getElementById('menuSection').classList.remove('hidden');
     document.getElementById('pinError').classList.add('hidden');
   };
   document.getElementById('doPinBtn').onclick = async () => {
-    const name = document.getElementById('pinName').value.trim();
     const pinEl = document.getElementById('pinCode');
     const pin = pinEl.value.trim();
     const errEl = document.getElementById('pinError');
     const showErr = msg => { errEl.textContent = '❌ ' + msg; errEl.classList.remove('hidden'); };
-    if (!name || !/^\d{6}$/.test(pin)) { showErr('กรอกชื่อและ PIN ตัวเลข 6 หลัก'); return; }
+    if (!/^\d{6}$/.test(pin)) { showErr('กรอก PIN ตัวเลข 6 หลัก'); return; }
 
     const btn = document.getElementById('doPinBtn');
     const orig = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>กำลังเข้าสู่ระบบ...';
-    const res = await GAS.pinLogin({ name, pin });
+    const res = await GAS.pinLogin({ pin });
     btn.disabled = false; btn.innerHTML = orig;
 
     if (res.ok && PIN_SCREENS[res.role]) {
@@ -2693,8 +2686,8 @@ function attachWelcomeHandlers() {
       return;
     }
     pinEl.value = '';
-    showErr(res.code === 'LOCKED' ? 'ใส่ PIN ผิดหลายครั้ง ลองใหม่ใน 15 นาที'
-          : res.code === 'BAD_PIN' ? 'ชื่อหรือ PIN ไม่ถูกต้อง'
+    showErr(res.code === 'LOCKED' ? 'มีการใส่ PIN ผิดหลายครั้ง ลองใหม่ใน 10 นาที'
+          : res.code === 'BAD_PIN' ? 'PIN ไม่ถูกต้อง'
           : 'เชื่อมต่อไม่ได้ ลองอีกครั้ง');
   };
   document.getElementById('pinCode').onkeydown = e => {
@@ -2702,15 +2695,14 @@ function attachWelcomeHandlers() {
   };
 }
 
-function openPinForm_(name, message) {
+function openPinForm_(message) {
   document.getElementById('menuSection').classList.add('hidden');
   document.getElementById('pinSection').classList.remove('hidden');
-  document.getElementById('pinName').value = name;
   document.getElementById('pinCode').value = '';
   const errEl = document.getElementById('pinError');
   errEl.textContent = message;
   errEl.classList.toggle('hidden', !message);
-  document.getElementById(name ? 'pinCode' : 'pinName').focus();
+  document.getElementById('pinCode').focus();
 }
 
 // ─── PIN session ──────────────────────────────────────────
@@ -2727,8 +2719,8 @@ function startPinSession_(s) {
   if (s.role === 'plan') refreshPlan_();
 }
 
-// expiredName: token ใช้ไม่ได้แล้ว (เช่น เจ้าหน้าที่การเงินเปลี่ยน PIN) → กลับไปหน้ากรอก PIN พร้อมชื่อเดิม
-function endPinSession_(expiredName) {
+// expired: token ใช้ไม่ได้แล้ว (เช่น เจ้าหน้าที่การเงินเปลี่ยน PIN) → กลับไปหน้ากรอก PIN
+function endPinSession_(expired) {
   pinSession = null;
   authCredential = null;
   planItems = []; planLoaded = false; planLoading = false; planHidden = {};
@@ -2737,11 +2729,11 @@ function endPinSession_(expiredName) {
   cacheSet_(PLAN_QUEUE_KEY, null);
   currentScreen = 'welcome';
   render();
-  if (expiredName !== undefined) openPinForm_(expiredName, '⚠️ กรุณาใส่ PIN อีกครั้ง');
+  if (expired) openPinForm_('⚠️ กรุณาใส่ PIN อีกครั้ง');
   refreshData('welcome');
 }
 
-function pinUnauthorized_() { endPinSession_(pinSession ? pinSession.name : ''); }
+function pinUnauthorized_() { endPinSession_(true); }
 
 function refreshPlan_() {
   const seq = ++planSeq;
