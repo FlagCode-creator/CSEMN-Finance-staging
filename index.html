@@ -224,8 +224,14 @@ const GAS = {
       body: body,
       redirect: 'follow'
     })
-      .then(r => r.text())
-      .then(t => { try { return JSON.parse(t); } catch(e) { return { ok:false, error:'Parse error: ' + t }; } })
+      .then(r => r.text().then(t => {
+        try { return JSON.parse(t); }
+        catch (e) {
+          // GAS ตอบเป็นหน้า HTML ของ Google (เช่น "ไม่พบเพจ") ยาวหลายหมื่นตัวอักษร ห้ามเอาไปแสดงให้ผู้ใช้
+          console.warn('GAS non-JSON response', r.status, t.slice(0, 2000));
+          return { ok: false, error: 'เซิร์ฟเวอร์ไม่ตอบกลับ (HTTP ' + r.status + ') กรุณาลองใหม่อีกครั้ง' };
+        }
+      }))
       .catch(err => ({ ok: false, error: String(err) }));
   },
 
