@@ -201,7 +201,8 @@ const GAS = {
       arg = { ...arg, year: viewYear };
     }
 
-    if (GAS_READ_ACTIONS[fnName]) {
+    // token ของ PIN ห้ามอยู่ใน URL (ติดใน log ของ Google และประวัติเบราว์เซอร์) GAS จึงตอบ POST_ONLY ถ้าส่งทาง GET
+    if (GAS_READ_ACTIONS[fnName] && !(authCredential && authCredential.token)) {
       // ─── READ: GET …/exec?action=fnName&payload=<json>&auth=<json> ───
       // อ่านข้อมูลปลอดภัยต่อการยิงซ้ำ → ลองใหม่อัตโนมัติเมื่อ GAS cold start/หลุด
       const params = new URLSearchParams({ action: fnName });
@@ -278,7 +279,12 @@ const GAS = {
   getBudget()        { return this._call('getBudget'); },
   saveBudget(obj)    { return this._call('saveBudget', obj); },
   closeFiscalYear(obj)    { return this._call('closeFiscalYear', obj); },
-  saveDebtCategories(obj) { return this._call('saveDebtCategories', obj); }
+  saveDebtCategories(obj) { return this._call('saveDebtCategories', obj); },
+  // 4 action นี้ไม่อยู่ใน GAS_READ_ACTIONS จึงส่งทาง POST เสมอ
+  pinLogin(obj)      { return this._call('pinLogin', obj); },
+  setPin(obj)        { return this._call('setPin', obj); },
+  getQueue(obj)      { return this._call('getQueue', obj); },
+  advanceStatus(obj) { return this._call('advanceStatus', obj); }
 };
 
 // ============================================================
@@ -313,6 +319,23 @@ const CACHE_NS_ = location.pathname.replace(/[^/]*$/, '');
 function cacheGet_(k) { try { return JSON.parse(localStorage.getItem(CACHE_NS_ + k) || 'null'); } catch (e) { return null; } }
 function cacheSet_(k, v) { try { localStorage.setItem(CACHE_NS_ + k, JSON.stringify(v)); } catch (e) {} }
 
+// ─── เข้าสู่ระบบด้วย PIN (มือถือ) ───
+// เครื่องเก็บ {token, name, role, exp} ไว้ 30 วัน เปิดครั้งถัดไปเข้าหน้าของ role เลย
+const PIN_SESSION_KEY = 'fdt_pin_v1';
+const PLAN_QUEUE_KEY  = 'fdt_plan_queue_v1';
+const PIN_SCREENS = { plan: 'plan', receive: 'receive' };
+let pinSession = null;
+let planItems  = [];      // [{id, document_number, title, amount}] เอกสารสถานะ 2 จาก getQueue ล่าสุด
+let planLoaded = false;   // false = ยังไม่มีรายการเลย (ทั้งจากเครื่องและเซิร์ฟเวอร์)
+let planLoading = false;
+let planSeq = 0;
+// id → 'sending' | 'done' ใบที่กดแล้วซ่อนไว้ทันที 'done' กันผลรีเฟรชที่ออกไปก่อนบันทึกเสร็จพาใบกลับมา
+let planHidden = {};
+
+function pinSessionValid_(s) {
+  return !!(s && s.token && s.exp > Date.now() && PIN_SCREENS[s.role]);
+}
+
 // ล้างข้อมูลระดับเจ้าหน้าที่ออกจากหน่วยความจำ (ตอนออกจากระบบ)
 function clearPrivateData_() {
   allRecords = []; documents = []; debts = []; statusHistory = [];
@@ -324,23 +347,30 @@ function renderSafe_() {
   if (currentScreen !== 'welcome') { render(); return; }
   const g = id => document.getElementById(id);
   const isOpen = id => g(id) && !g(id).classList.contains('hidden');
-  if ((g('doLoginBtn') && g('doLoginBtn').disabled) || (g('doPasscodeBtn') && g('doPasscodeBtn').disabled)) return; // กำลังตรวจรหัส — ห้ามวาดทับ
+  if (['doLoginBtn', 'doPasscodeBtn', 'doPinBtn'].some(id => g(id) && g(id).disabled)) return; // กำลังตรวจรหัส — ห้ามวาดทับ
   const st = {
-    pass: isOpen('passcodeSection'), login: isOpen('loginSection'),
+    pass: isOpen('passcodeSection'), login: isOpen('loginSection'), pin: isOpen('pinSection'),
     code: g('publicPasscode') ? g('publicPasscode').value : '',
     user: g('username') ? g('username').value : '',
     pw:   g('password') ? g('password').value : '',
+    pinName: g('pinName') ? g('pinName').value : '',
+    pinCode: g('pinCode') ? g('pinCode').value : '',
+    pinErr: isOpen('pinError') ? g('pinError').textContent : '',
     focus: document.activeElement ? document.activeElement.id : ''
   };
   render();
-  if (st.pass || st.login) {
+  if (st.pass || st.login || st.pin) {
     g('menuSection').classList.add('hidden');
     if (st.pass)  g('passcodeSection').classList.remove('hidden');
     if (st.login) g('loginSection').classList.remove('hidden');
+    if (st.pin)   g('pinSection').classList.remove('hidden');
   }
   if (g('publicPasscode')) g('publicPasscode').value = st.code;
   if (g('username')) g('username').value = st.user;
   if (g('password')) g('password').value = st.pw;
+  if (g('pinName')) g('pinName').value = st.pinName;
+  if (g('pinCode')) g('pinCode').value = st.pinCode;
+  if (st.pinErr) { g('pinError').textContent = st.pinErr; g('pinError').classList.remove('hidden'); }
   if (st.focus && g(st.focus)) g(st.focus).focus();
 }
 
@@ -1314,6 +1344,20 @@ function renderWelcome() {
               <div id="menuSection" class="space-y-3">
                 <button id="viewPublicBtn" class="w-full btn-hover py-3.5 rounded-xl font-bold text-white" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size}px;background:linear-gradient(135deg,${CONFIG.primary_color},${CONFIG.accent_color});">🔍 ติดตามสถานะเอกสาร</button>
                 <button id="loginStaffBtn" class="w-full btn-hover py-3.5 rounded-xl font-bold" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size}px;color:${CONFIG.text_color};background-color:${CONFIG.background_color};">🔐 เข้าสู่ระบบเจ้าหน้าที่</button>
+                <button id="loginPinBtn" class="w-full btn-hover py-3.5 rounded-xl font-bold" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size}px;color:${CONFIG.text_color};background-color:${CONFIG.background_color};">🔢 เข้าสู่ระบบด้วย PIN</button>
+              </div>
+              <div id="pinSection" class="hidden space-y-3">
+                <div>
+                  <label class="block font-bold mb-1.5" for="pinName" style="font-family:${CONFIG.font_family};font-size:16px;color:${CONFIG.text_color};">ชื่อ</label>
+                  <input type="text" id="pinName" autocomplete="name" class="w-full px-4 py-3 rounded-xl border-2" style="font-family:${CONFIG.font_family};font-size:16px;border-color:${CONFIG.primary_color};">
+                </div>
+                <div>
+                  <label class="block font-bold mb-1.5" for="pinCode" style="font-family:${CONFIG.font_family};font-size:16px;color:${CONFIG.text_color};">PIN 6 หลัก</label>
+                  <input type="password" id="pinCode" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" class="w-full px-4 py-3 rounded-xl border-2 text-center font-bold tracking-widest" style="font-family:${CONFIG.font_family};font-size:20px;border-color:${CONFIG.primary_color};">
+                </div>
+                <div id="pinError" class="hidden p-3 rounded-xl font-bold text-sm" style="background-color:#fee2e2;color:#991b1b;font-family:${CONFIG.font_family};"></div>
+                <button id="doPinBtn" class="w-full btn-hover py-3.5 rounded-xl font-bold text-white" style="font-family:${CONFIG.font_family};font-size:16px;background:linear-gradient(135deg,${CONFIG.primary_color},${CONFIG.accent_color});">เข้าสู่ระบบ</button>
+                <button id="backFromPinBtn" class="w-full btn-hover py-3 rounded-xl font-medium" style="font-family:${CONFIG.font_family};font-size:16px;color:${CONFIG.text_color};background-color:${CONFIG.background_color};">← กลับ</button>
               </div>
               <div id="loginSection" class="hidden space-y-3">
                 <div>
@@ -1952,6 +1996,20 @@ function renderStaffDashboard() {
           </div>
           ${filteredDebts.length > 0 ? renderDebtPagination(filteredDebts.length, '') : ''}
         </div>
+
+        <div class="rounded-2xl p-4 md:p-6 shadow-lg" style="background-color:${CONFIG.surface_color};margin-top:1.5rem;">
+          <h2 class="font-bold mb-1flex items-center gap-2" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size*1.3}px;color:${CONFIG.text_color};">🔢 จัดการ PIN</h2>
+          <p class="text-sm mb-3" style="font-family:${CONFIG.font_family};color:${CONFIG.text_color};opacity:.7;">ตั้ง PIN ให้คนที่ใช้มือถือ ตั้งชื่อเดิมซ้ำคือเปลี่ยน PIN และเครื่องที่เคยเข้าไว้ต้องใส่ PIN ใหม่</p>
+          <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <input type="text" id="pinMgrName" placeholder="ชื่อ" autocomplete="off" class="w-full px-4 py-3 rounded-xl border-2" style="font-family:${CONFIG.font_family};border-color:${CONFIG.primary_color};">
+            <select id="pinMgrRole" class="w-full px-4 py-3 rounded-xl border-2 font-bold" style="font-family:${CONFIG.font_family};border-color:${CONFIG.primary_color};">
+              <option value="plan">ตัดแผน (เจ้าหน้าที่แผน)</option>
+              <option value="receive">รับเอกสาร</option>
+            </select>
+            <input type="text" id="pinMgrPin" placeholder="PIN 6 หลัก" inputmode="numeric" maxlength="6" autocomplete="off" class="w-full px-4 py-3 rounded-xl border-2 tracking-widest" style="font-family:${CONFIG.font_family};border-color:${CONFIG.primary_color};">
+            <button id="pinMgrSave" class="w-full btn-hover py-3 rounded-xl font-bold text-white" style="font-family:${CONFIG.font_family};background:linear-gradient(135deg,${CONFIG.primary_color},${CONFIG.accent_color});">💾 บันทึก PIN</button>
+          </div>
+        </div>
       </main>
     </div>`;
 }
@@ -2042,6 +2100,81 @@ function renderPublicView() {
     </div>`;
 }
 
+// ─── หน้ามือถือของคนที่เข้าด้วย PIN (ตัดแผน / รับเอกสาร) ───
+// ขนาดตัวอักษรตายตัว ไม่ใช้ CONFIG.font_size ที่ย่อเหลือ 11px บนมือถือ
+function renderPinHeader_(title) {
+  return `
+    <header class="sticky top-0 z-20 shadow-lg" style="background:linear-gradient(135deg,${CONFIG.primary_color},${CONFIG.accent_color});">
+      <div class="max-w-lg mx-auto px-4 py-3 flex justify-between items-center gap-3">
+        <div class="min-w-0">
+          <h1 class="font-bold text-white truncate" style="font-family:${CONFIG.font_family};font-size:20px;">${title}</h1>
+          <p class="text-white opacity-90 truncate" style="font-family:${CONFIG.font_family};font-size:14px;">${escHtml_(pinSession ? pinSession.name : '')}</p>
+        </div>
+        <button id="pinLogoutBtn" class="px-4 py-2 rounded-xl font-bold text-white flex-shrink-0" style="font-family:${CONFIG.font_family};font-size:15px;background-color:rgba(255,255,255,.2);">ออกจากระบบ</button>
+      </div>
+    </header>`;
+}
+
+function renderPlanScreen() {
+  return `
+    <div class="w-full min-h-full" style="background-color:${CONFIG.background_color};">
+      ${renderPinHeader_('ตัดแผน')}
+      <main class="max-w-lg mx-auto px-4 py-4" style="padding-bottom:6rem;">
+        <div class="flex justify-between items-center gap-3 mb-3">
+          <p id="planCount" class="font-bold" style="font-family:${CONFIG.font_family};font-size:16px;color:${CONFIG.text_color};"></p>
+          <button id="planRefreshBtn" class="px-4 py-2 rounded-xl font-bold flex-shrink-0" style="font-family:${CONFIG.font_family};font-size:15px;color:${CONFIG.primary_color};background-color:${CONFIG.surface_color};border:2px solid ${CONFIG.primary_color};"></button>
+        </div>
+        <div id="planList" class="space-y-3"></div>
+      </main>
+    </div>`;
+}
+
+// วาดเฉพาะรายการ ไม่วาดทั้งหน้า ตำแหน่งเลื่อนจอจึงไม่กระโดดตอนใบหายไป
+function renderPlanList_() {
+  const list = document.getElementById('planList');
+  if (!list) return;
+  const items = planItems.filter(i => !planHidden[i.id]);
+  const font = `font-family:${CONFIG.font_family};`;
+  document.getElementById('planCount').textContent = planLoaded ? `รอตัดแผน ${items.length} รายการ` : '';
+  const rb = document.getElementById('planRefreshBtn');
+  rb.disabled = planLoading;
+  rb.innerHTML = planLoading ? '<span class="spinner-dark" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px;"></span>กำลังโหลด' : '🔄 รีเฟรช';
+  if (!planLoaded) {
+    list.innerHTML = `<p class="text-center py-10 loading-pulse" style="${font}font-size:16px;color:${CONFIG.text_color};">กำลังโหลดรายการ...</p>`;
+    return;
+  }
+  if (!items.length) {
+    list.innerHTML = `
+      <div class="rounded-2xl p-6 text-center" style="background-color:${CONFIG.surface_color};">
+        <div style="font-size:2.5rem;">✅</div>
+        <p class="font-bold mt-2" style="${font}font-size:18px;color:${CONFIG.text_color};">ไม่มีเอกสารรอตัดแผน</p>
+        <p class="mt-1" style="${font}font-size:15px;color:${CONFIG.text_color};opacity:.7;">กดรีเฟรชเพื่อดูเอกสารใหม่</p>
+      </div>`;
+    return;
+  }
+  list.innerHTML = items.map(i => {
+    const hasAmount = i.amount !== '' && i.amount != null && !isNaN(Number(i.amount));
+    return `
+      <div class="plan-card rounded-2xl p-4 shadow-lg" data-id="${escHtml_(i.id)}" style="background-color:${CONFIG.surface_color};">
+        <div class="font-bold" style="${font}font-size:18px;color:${CONFIG.text_color};overflow-wrap:anywhere;">${escHtml_(i.document_number)}</div>
+        ${i.title ? `<div class="mt-1" style="${font}font-size:16px;color:#334155;overflow-wrap:anywhere;">${escHtml_(i.title)}</div>` : ''}
+        ${hasAmount ? `<div class="font-bold mt-1" style="${font}font-size:16px;color:#047857;">${baht(i.amount)} บาท</div>` : ''}
+        <button class="plan-done w-full rounded-xl font-bold text-white mt-3" data-id="${escHtml_(i.id)}" style="${font}font-size:18px;min-height:52px;background-color:#16a34a;">✅ ตัดแผนแล้ว</button>
+      </div>`;
+  }).join('');
+}
+
+function renderReceiveScreen() {
+  return `
+    <div class="w-full min-h-full" style="background-color:${CONFIG.background_color};">
+      ${renderPinHeader_('รับเอกสาร')}
+      <main class="max-w-lg mx-auto px-4 py-10 text-center">
+        <div style="font-size:2.5rem;">🚧</div>
+        <p class="font-bold mt-2" style="font-family:${CONFIG.font_family};font-size:18px;color:${CONFIG.text_color};">หน้ารับเอกสาร (กำลังพัฒนา)</p>
+      </main>
+    </div>`;
+}
+
 // ============================================================
 // MAIN RENDER & EVENT ATTACHMENT
 // ============================================================
@@ -2062,6 +2195,13 @@ function render() {
   } else if (currentScreen === 'budget') {
     app.innerHTML = renderBudgetScreen();
     attachBudgetHandlers();
+  } else if (currentScreen === 'plan') {
+    app.innerHTML = renderPlanScreen();
+    renderPlanList_();
+    attachPlanHandlers_();
+  } else if (currentScreen === 'receive') {
+    app.innerHTML = renderReceiveScreen();
+    document.getElementById('pinLogoutBtn').onclick = () => endPinSession_();
   }
 }
 
@@ -2372,7 +2512,141 @@ function attachWelcomeHandlers() {
   document.getElementById('password').onkeydown = e => {
     if (e.key === 'Enter') document.getElementById('doLoginBtn').click();
   };
+
+  document.getElementById('loginPinBtn').onclick = () => openPinForm_('', '');
+  document.getElementById('backFromPinBtn').onclick = () => {
+    document.getElementById('pinSection').classList.add('hidden');
+    document.getElementById('menuSection').classList.remove('hidden');
+    document.getElementById('pinError').classList.add('hidden');
+  };
+  document.getElementById('doPinBtn').onclick = async () => {
+    const name = document.getElementById('pinName').value.trim();
+    const pinEl = document.getElementById('pinCode');
+    const pin = pinEl.value.trim();
+    const errEl = document.getElementById('pinError');
+    const showErr = msg => { errEl.textContent = '❌ ' + msg; errEl.classList.remove('hidden'); };
+    if (!name || !/^\d{6}$/.test(pin)) { showErr('กรอกชื่อและ PIN ตัวเลข 6 หลัก'); return; }
+
+    const btn = document.getElementById('doPinBtn');
+    const orig = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>กำลังเข้าสู่ระบบ...';
+    const res = await GAS.pinLogin({ name, pin });
+    btn.disabled = false; btn.innerHTML = orig;
+
+    if (res.ok && PIN_SCREENS[res.role]) {
+      const s = { token: res.token, name: res.name, role: res.role, exp: res.exp };
+      cacheSet_(PIN_SESSION_KEY, s);
+      startPinSession_(s);
+      return;
+    }
+    pinEl.value = '';
+    showErr(res.code === 'LOCKED' ? 'ใส่ PIN ผิดหลายครั้ง ลองใหม่ใน 15 นาที'
+          : res.code === 'BAD_PIN' ? 'ชื่อหรือ PIN ไม่ถูกต้อง'
+          : 'เชื่อมต่อไม่ได้ ลองอีกครั้ง');
+  };
+  document.getElementById('pinCode').onkeydown = e => {
+    if (e.key === 'Enter') document.getElementById('doPinBtn').click();
+  };
 }
+
+function openPinForm_(name, message) {
+  document.getElementById('menuSection').classList.add('hidden');
+  document.getElementById('pinSection').classList.remove('hidden');
+  document.getElementById('pinName').value = name;
+  document.getElementById('pinCode').value = '';
+  const errEl = document.getElementById('pinError');
+  errEl.textContent = message;
+  errEl.classList.toggle('hidden', !message);
+  document.getElementById(name ? 'pinCode' : 'pinName').focus();
+}
+
+// ─── PIN session ──────────────────────────────────────────
+function startPinSession_(s) {
+  pinSession = s;
+  authCredential = { token: s.token };
+  const cached = s.role === 'plan' ? cacheGet_(PLAN_QUEUE_KEY) : null;
+  planItems = Array.isArray(cached) ? cached : [];
+  planLoaded = Array.isArray(cached);
+  planHidden = {};
+  currentScreen = PIN_SCREENS[s.role];
+  render();
+  document.getElementById('app').scrollTop = 0;
+  if (s.role === 'plan') refreshPlan_();
+}
+
+// expiredName: token ใช้ไม่ได้แล้ว (เช่น เจ้าหน้าที่การเงินเปลี่ยน PIN) → กลับไปหน้ากรอก PIN พร้อมชื่อเดิม
+function endPinSession_(expiredName) {
+  pinSession = null;
+  authCredential = null;
+  planItems = []; planLoaded = false; planLoading = false; planHidden = {};
+  planSeq++;
+  cacheSet_(PIN_SESSION_KEY, null);
+  cacheSet_(PLAN_QUEUE_KEY, null);
+  currentScreen = 'welcome';
+  render();
+  if (expiredName !== undefined) openPinForm_(expiredName, '⚠️ กรุณาใส่ PIN อีกครั้ง');
+  refreshData('welcome');
+}
+
+function pinUnauthorized_() { endPinSession_(pinSession ? pinSession.name : ''); }
+
+function refreshPlan_() {
+  const seq = ++planSeq;
+  planLoading = true;
+  renderPlanList_();
+  return GAS.getQueue({ status: 2 }).then(res => {
+    if (seq !== planSeq) return;
+    planLoading = false;
+    if (res.ok) {
+      planItems = res.items || [];
+      planLoaded = true;
+      cacheSet_(PLAN_QUEUE_KEY, planItems);
+    } else if (res.code === 'UNAUTHORIZED') {
+      pinUnauthorized_();
+      return;
+    } else {
+      showToast('❌ โหลดรายการไม่สำเร็จ ลองกดรีเฟรช', 'error');
+    }
+    renderPlanList_();
+  });
+}
+
+// ใบหายทันที ส่งข้อมูลเบื้องหลัง ส่งซ้ำได้เสมอเพราะ GAS ตอบ changed:false เมื่อเอกสารเลยสถานะ 2 แล้ว
+async function markPlanned_(id) {
+  if (planHidden[id]) return;
+  const item = planItems.find(i => i.id === id);
+  if (!item) return;
+  planHidden[id] = 'sending';
+  renderPlanList_();
+  const res = await GAS.advanceStatus({ document_id: id, to: 3 });
+  if (!pinSession) return;
+  if (res.ok) {
+    planHidden[id] = 'done';
+    planItems = planItems.filter(i => i.id !== id);
+    cacheSet_(PLAN_QUEUE_KEY, planItems);
+    return;
+  }
+  delete planHidden[id];
+  if (res.code === 'UNAUTHORIZED') { pinUnauthorized_(); return; }
+  renderPlanList_();
+  if (!res.code) { showToast(`❌ ส่งไม่สำเร็จ ${item.document_number} ลองกดอีกครั้ง`, 'error'); return; }
+  // เซิร์ฟเวอร์ปฏิเสธ (เช่น มีคนย้ายสถานะเอกสารไปแล้ว) → ดึงรายการใหม่ ใบที่ไม่ใช่สถานะ 2 จะหายไปเอง
+  showToast(`❌ ${item.document_number} บันทึกไม่ได้ กำลังดึงรายการใหม่`, 'error');
+  refreshPlan_();
+}
+
+function attachPlanHandlers_() {
+  document.getElementById('pinLogoutBtn').onclick = () => endPinSession_();
+  document.getElementById('planRefreshBtn').onclick = () => refreshPlan_();
+  document.getElementById('planList').onclick = e => {
+    const btn = e.target.closest('.plan-done');
+    if (btn) markPlanned_(btn.dataset.id);
+  };
+}
+
+// iPhone เปิดแอปจากไอคอนมักได้หน้าเดิมค้างไว้ ไม่โหลดใหม่ → ดึงรายการใหม่ทุกครั้งที่กลับมาที่แอป
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && currentScreen === 'plan') refreshPlan_();
+});
 
 // ─── Staff ────────────────────────────────────────────────
 function attachStaffHandlers() {
@@ -2406,6 +2680,21 @@ function attachStaffHandlers() {
     upBtn.onclick = () => upFile.click();
     upFile.onchange = e => { const f = e.target.files[0]; if (f) handleBudgetUpload_(f); e.target.value = ''; };
   }
+  document.getElementById('pinMgrSave').onclick = async () => {
+    const name = document.getElementById('pinMgrName').value.trim();
+    const role = document.getElementById('pinMgrRole').value;
+    const pin  = document.getElementById('pinMgrPin').value.trim();
+    if (!name || !/^\d{6}$/.test(pin)) { showToast('❌ กรอกชื่อและ PIN ตัวเลข 6 หลัก', 'error'); return; }
+    const btn = document.getElementById('pinMgrSave');
+    const orig = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>กำลังบันทึก...';
+    const res = await GAS.setPin({ name, role, pin });
+    btn.disabled = false; btn.innerHTML = orig;
+    if (res.ok) {
+      showToast(`✅ บันทึก PIN ของ ${res.name} แล้ว`);
+      document.getElementById('pinMgrName').value = '';
+      document.getElementById('pinMgrPin').value = '';
+    } else showToast('❌ บันทึก PIN ไม่สำเร็จ: ' + (res.error || ''), 'error');
+  };
   document.getElementById('manageAnnBtn').onclick  = () => showAnnManageModal();
   document.getElementById('importDataBtn').onclick = () => {
     showToast('🔄 กำลังรีเฟรชข้อมูล...');
@@ -2596,6 +2885,9 @@ async function init() {
     BUDGET_SUMMARY = bc;
     if (bc.items && bc.items.length) BUDGET_ITEMS = bc.items;
   }
+  // เคยเข้าด้วย PIN และ token ยังไม่หมดอายุ → เข้าหน้าของ role เลย ไม่โหลดข้อมูลหน้าแรก
+  const ps = cacheGet_(PIN_SESSION_KEY);
+  if (pinSessionValid_(ps)) { startPinSession_(ps); return; }
   render();
 
   // 2) โหลดของใหม่จาก GAS "พร้อมกัน" 2 คำขอ (เดิมต่อคิว ช้าเป็นสองเท่า)
