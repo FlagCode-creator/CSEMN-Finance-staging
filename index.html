@@ -288,7 +288,8 @@ const GAS = {
   getQueue(obj)      { return this._call('getQueue', obj); },
   advanceStatus(obj) { return this._call('advanceStatus', obj); },
   previewStatement(obj) { return this._call('previewStatement', obj); },
-  applyStatement(obj)   { return this._call('applyStatement', obj); }
+  applyStatement(obj)   { return this._call('applyStatement', obj); },
+  uploadReceivePhoto(obj) { return this._call('uploadReceivePhoto', obj); }
 };
 
 // ============================================================
@@ -321,7 +322,7 @@ const BUDGET_CACHE_KEY  = 'fdt_budget_v1';
 // เว็บจริงกับเว็บทดลองอยู่โดเมนเดียวกัน (คนละโฟลเดอร์) จึงต้องแยก key ตามโฟลเดอร์ ไม่ให้ข้อมูลปนกัน
 const CACHE_NS_ = location.pathname.replace(/[^/]*$/, '');
 function cacheGet_(k) { try { return JSON.parse(localStorage.getItem(CACHE_NS_ + k) || 'null'); } catch (e) { return null; } }
-function cacheSet_(k, v) { try { localStorage.setItem(CACHE_NS_ + k, JSON.stringify(v)); } catch (e) {} }
+function cacheSet_(k, v) { try { localStorage.setItem(CACHE_NS_ + k, JSON.stringify(v)); return true; } catch (e) { return false; } }
 
 // ─── เข้าสู่ระบบด้วย PIN (มือถือ) ───
 // เครื่องเก็บ {token, name, role, exp} ไว้ 30 วัน เปิดครั้งถัดไปเข้าหน้าของ role เลย
@@ -335,6 +336,16 @@ let planLoading = false;
 let planSeq = 0;
 // id → 'sending' | 'done' ใบที่กดแล้วซ่อนไว้ทันที 'done' กันผลรีเฟรชที่ออกไปก่อนบันทึกเสร็จพาใบกลับมา
 let planHidden = {};
+
+// ─── หน้ารับเอกสาร: ฟอร์มกับรูปเก็บลงเครื่องทุกครั้งที่แก้ เน็ตหลุดหรือปิดแอปแล้วกลับมาได้ครบ ───
+// ล้างเมื่อส่งสำเร็จหรือกดออกจากระบบเอง token หมดอายุแล้วเข้าใหม่ยังได้ฟอร์มเดิม
+const RECEIVE_DRAFT_KEY = 'fdt_receive_draft_v1';  // {document_number, sender, title, amount, doc_date}
+const RECEIVE_PAGES_KEY = 'fdt_receive_pages_v1';  // [{b64, url}] แยก key เพราะใหญ่ จะได้ไม่เขียนรูปซ้ำทุกตัวอักษรที่พิมพ์
+const RECEIVE_DONE_KEY  = 'fdt_receive_done_v1';   // [{document_number, title, pages, day, time}]
+const RECEIVE_MAX_SIDE = 1600;
+let receiveDraft = {};
+let receivePages = [];  // url มีค่าเมื่ออัปโหลดแล้ว กดส่งอีกครั้งจึงไม่อัปโหลดหน้าเดิมซ้ำ
+let receiveStatus = { phase: 'idle', text: '', retry: false };  // phase: idle | photo | sending | error
 
 function pinSessionValid_(s) {
   return !!(s && s.token && s.exp > Date.now() && PIN_SCREENS[s.role]);
@@ -820,7 +831,7 @@ function showDocDetail(doc) {
           <div class="grid grid-cols-2 gap-3">
             <div>
               <p class="text-xs font-bold mb-1 opacity-50" style="color:${CONFIG.text_color};">เลขที่เอกสาร</p>
-              <p class="font-bold" style="font-family:${CONFIG.font_family};color:${CONFIG.primary_color};">${doc.document_number}</p>
+              <p class="font-bold" style="font-family:${CONFIG.font_family};color:${CONFIG.primary_color};">${escHtml_(doc.document_number)}</p>
             </div>
             <div>
               <p class="text-xs font-bold mb-1 opacity-50" style="color:${CONFIG.text_color};">วันที่รับเอกสาร</p>
@@ -830,15 +841,15 @@ function showDocDetail(doc) {
         </div>
         <div>
           <p class="text-xs font-bold mb-1 opacity-50" style="color:${CONFIG.text_color};">ผู้ส่ง</p>
-          <p class="font-bold" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size}px;color:${CONFIG.text_color};">${doc.sender}</p>
+          <p class="font-bold" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size}px;color:${CONFIG.text_color};">${escHtml_(doc.sender)}</p>
         </div>
         <div>
           <p class="text-xs font-bold mb-1 opacity-50" style="color:${CONFIG.text_color};">หัวข้อเอกสาร</p>
-          <p class="font-bold" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size}px;color:${CONFIG.text_color};">${doc.title}</p>
+          <p class="font-bold" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size}px;color:${CONFIG.text_color};">${escHtml_(doc.title)}</p>
         </div>
         <div>
           <p class="text-xs font-bold mb-1 opacity-50" style="color:${CONFIG.text_color};">รายละเอียด</p>
-          <p class="leading-relaxed" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size}px;color:${CONFIG.text_color};white-space:pre-wrap;">${doc.item}</p>
+          <p class="leading-relaxed" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size}px;color:${CONFIG.text_color};white-space:pre-wrap;">${escHtml_(doc.item)}</p>
         </div>
         <div>
           <p class="text-xs font-bold mb-2 opacity-50" style="color:${CONFIG.text_color};">สถานะปัจจุบัน</p>
@@ -1005,7 +1016,7 @@ function showSummaryModal() {
                   return `
                   <div class="flex items-center justify-between rounded-xl gap-3" style="background-color:${CONFIG.surface_color};padding:12px 16px;box-shadow:0 1px 4px rgba(0,0,0,.04);">
                     <div class="flex-1 min-w-0">
-                      <p class="font-bold truncate" style="font-size:${CONFIG.font_size*.9}px;color:${CONFIG.text_color};">${h.doc.document_number} — ${h.doc.title}</p>
+                      <p class="font-bold truncate" style="font-size:${CONFIG.font_size*.9}px;color:${CONFIG.text_color};">${escHtml_(h.doc.document_number)} — ${escHtml_(h.doc.title)}</p>
                       <p style="font-size:${CONFIG.font_size*.75}px;color:${CONFIG.text_color};opacity:.55;">เวลา ${time} น.</p>
                     </div>
                     <span class="inline-flex items-center gap-1 rounded-full font-bold text-white flex-shrink-0" style="background-color:${s ? s.color : '#6b7280'};font-size:${CONFIG.font_size*.75}px;padding:5px 12px;">${s ? s.icon + ' ' + s.name : 'ไม่ทราบสถานะ'}</span>
@@ -1569,6 +1580,11 @@ function renderLoadingOverlay() {
   </div>`;
 }
 
+// file_url ของเอกสารที่รับจากมือถือ = ลิงก์รูปทุกหน้าคั่นด้วยช่องว่าง รับเฉพาะ https กันลิงก์ javascript: ที่ใส่มาเอง
+function docPhotoUrls_(doc) {
+  return String(doc.file_url || '').split(/\s+/).filter(u => /^https:\/\/\S+$/.test(u));
+}
+
 function renderDocRow(doc, isStaff) {
   const status = STATUS_OPTIONS.find(s => s.id === doc.status);
   const isPending = isStaff && pendingDocChanges[doc.__backendId] !== undefined;
@@ -1588,14 +1604,15 @@ function renderDocRow(doc, isStaff) {
     <div class="doc-row-click rounded-xl px-3 py-2 md:px-4 md:py-3 card-animate flex items-center gap-2 md:gap-3 flex-wrap md:flex-nowrap cursor-pointer"
          data-id="${doc.__backendId}"
          style="background-color:${rowBg};border:${rowBorder};transition:transform .2s ease,box-shadow .2s ease;">
-      <span class="px-3 py-1 rounded-full text-xs font-bold text-white flex-shrink-0" style="background-color:${CONFIG.primary_color};">${doc.document_number}</span>
+      <span class="px-3 py-1 rounded-full text-xs font-bold text-white flex-shrink-0" style="background-color:${CONFIG.primary_color};">${escHtml_(doc.document_number)}</span>
       ${pendingBadge}
       <div class="flex-1 min-w-0">
         <div class="flex items-center gap-2 flex-wrap">
-          <h3 class="font-bold truncate" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size}px;color:${CONFIG.text_color};">${doc.title}</h3>
-          <span class="font-bold flex-shrink-0" style="font-size:${CONFIG.font_size*.85}px;color:${CONFIG.text_color};opacity:.85;">จาก: ${doc.sender}</span>
+          <h3 class="font-bold truncate" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size}px;color:${CONFIG.text_color};">${escHtml_(doc.title)}</h3>
+          <span class="font-bold flex-shrink-0" style="font-size:${CONFIG.font_size*.85}px;color:${CONFIG.text_color};opacity:.85;">จาก: ${escHtml_(doc.sender)}</span>
+          ${isStaff ? docPhotoUrls_(doc).map((u, i) => `<button class="doc-photo font-bold flex-shrink-0" data-url="${escHtml_(u)}" style="font-size:${CONFIG.font_size*.85}px;color:${CONFIG.primary_color};text-decoration:underline;">📷 ${i ? 'หน้า ' + (i + 1) : 'รูป'}</button>`).join('') : ''}
         </div>
-        <p class="text-xs opacity-60 truncate" style="color:${CONFIG.text_color};">${doc.item}</p>
+        <p class="text-xs opacity-60 truncate" style="color:${CONFIG.text_color};">${escHtml_(doc.item)}</p>
       </div>
       <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold text-white flex-shrink-0" style="background-color:${displayStatus.color};">${displayStatus.icon} ${displayStatus.name}</span>
       <span class="text-xs opacity-50 flex-shrink-0 whitespace-nowrap" style="color:${CONFIG.text_color};">${formatThaiDate(doc.created_at)}</span>
@@ -2317,14 +2334,79 @@ function renderPlanList_() {
 }
 
 function renderReceiveScreen() {
+  const font = `font-family:${CONFIG.font_family};`;
+  const star = ' <span style="color:#dc2626;">*</span>';
+  const field = (key, label, attrs) => `
+    <div>
+      <label for="rcv_${key}" class="block font-bold mb-1" style="${font}font-size:16px;color:${CONFIG.text_color};">${label}</label>
+      <input id="rcv_${key}" data-field="${key}" ${attrs} value="${escHtml_(receiveDraft[key] || '')}" class="w-full rounded-xl border-2" style="${font}font-size:18px;min-height:52px;padding:10px 14px;border-color:#cbd5e1;background-color:#fff;color:${CONFIG.text_color};">
+    </div>`;
   return `
     <div class="w-full min-h-full" style="background-color:${CONFIG.background_color};">
       ${renderPinHeader_('รับเอกสาร')}
-      <main class="max-w-lg mx-auto px-4 py-10 text-center">
-        <div style="font-size:2.5rem;">🚧</div>
-        <p class="font-bold mt-2" style="font-family:${CONFIG.font_family};font-size:18px;color:${CONFIG.text_color};">หน้ารับเอกสาร (กำลังพัฒนา)</p>
+      <main class="max-w-lg mx-auto px-4 py-4" style="padding-bottom:6rem;display:flex;flex-direction:column;gap:14px;">
+        <section class="rounded-2xl p-4 shadow-lg" style="background-color:${CONFIG.surface_color};">
+          <button id="rcvPhotoBtn" class="w-full rounded-xl font-bold text-white" style="${font}font-size:18px;min-height:56px;background-color:${CONFIG.primary_color};">📷 ถ่ายรูปเอกสาร</button>
+          <input type="file" id="rcvPhoto" accept="image/*" capture="environment" multiple style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;">
+          <p class="mt-2" style="${font}font-size:15px;color:#64748b;">ไม่บังคับ เอกสารหลายหน้าให้กดถ่ายทีละหน้า</p>
+          <div id="rcvPages" class="grid grid-cols-3 gap-2 mt-2"></div>
+        </section>
+        <section id="rcvForm" class="rounded-2xl p-4 shadow-lg" style="background-color:${CONFIG.surface_color};display:flex;flex-direction:column;gap:12px;">
+          ${field('document_number', 'เลขที่เอกสาร' + star, 'type="text" autocomplete="off"')}
+          ${field('sender', 'ผู้ส่ง / ส่วนราชการ', 'type="text" autocomplete="off"')}
+          ${field('title', 'เรื่อง' + star, 'type="text" autocomplete="off"')}
+          ${field('amount', 'ยอดเงิน (บาท)', 'type="text" inputmode="decimal" autocomplete="off" placeholder="ไม่บังคับ"')}
+          ${field('doc_date', 'วันที่เอกสาร (ไม่ใส่ = วันนี้)', 'type="date"')}
+        </section>
+        <div id="rcvStatus"></div>
+        <button id="rcvSend" class="w-full rounded-xl font-bold text-white" style="${font}font-size:20px;min-height:60px;background-color:#16a34a;"></button>
+        <button id="rcvClear" class="w-full rounded-xl font-bold" style="${font}font-size:16px;min-height:48px;color:#64748b;background-color:transparent;border:2px solid #cbd5e1;">ล้างฟอร์ม</button>
+        <section id="rcvDone"></section>
       </main>
     </div>`;
+}
+
+function renderReceivePages_() {
+  const box = document.getElementById('rcvPages');
+  if (!box) return;
+  const locked = receiveStatus.phase === 'sending';
+  box.innerHTML = receivePages.map((p, i) => `
+    <div class="rcv-page" style="position:relative;">
+      <img src="data:image/jpeg;base64,${p.b64}" alt="หน้า ${i + 1}" style="display:block;width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:10px;border:2px solid ${p.url ? '#86efac' : '#e2e8f0'};">
+      <span style="position:absolute;left:6px;bottom:6px;padding:0 8px;border-radius:9px;background:rgba(15,23,42,.75);color:#fff;font-size:14px;font-weight:bold;">${i + 1}</span>
+      ${locked ? '' : `<button class="rcv-del" data-i="${i}" aria-label="ลบหน้า ${i + 1}" style="position:absolute;top:4px;right:4px;width:40px;height:40px;border-radius:50%;background:rgba(220,38,38,.92);color:#fff;font-size:18px;font-weight:bold;">✕</button>`}
+    </div>`).join('')
+    + (receiveStatus.phase === 'photo' ? `<div class="loading-pulse" style="display:flex;align-items:center;justify-content:center;aspect-ratio:3/4;border-radius:10px;background:#f1f5f9;font-family:${CONFIG.font_family};font-size:14px;color:#475569;">กำลังย่อรูป...</div>` : '');
+}
+
+function renderReceiveStatus_() {
+  const el = document.getElementById('rcvStatus');
+  if (!el) return;
+  const s = receiveStatus, font = `font-family:${CONFIG.font_family};`;
+  el.innerHTML = s.phase === 'error'
+    ? `<div role="alert" class="rounded-xl p-3 font-bold" style="${font}font-size:16px;background:#fef2f2;border:2px solid #fca5a5;color:#991b1b;">❌ ${escHtml_(s.text)}</div>`
+    : s.phase === 'sending'
+    ? `<p class="text-center font-bold" style="${font}font-size:16px;color:${CONFIG.text_color};"><span class="spinner-dark" style="width:16px;height:16px;vertical-align:-3px;margin-right:8px;"></span>${escHtml_(s.text)}</p>`
+    : '';
+  const send = document.getElementById('rcvSend');
+  send.disabled = s.phase === 'sending' || s.phase === 'photo';
+  send.style.opacity = send.disabled ? '.6' : '1';
+  send.textContent = s.phase === 'sending' ? 'กำลังส่ง...' : s.retry ? '🔁 ส่งอีกครั้ง' : '📤 ส่งเข้าระบบ';
+  document.getElementById('rcvClear').disabled = s.phase === 'sending';
+}
+
+function renderReceiveDone_() {
+  const el = document.getElementById('rcvDone');
+  if (!el) return;
+  const list = receiveDoneToday_();
+  const font = `font-family:${CONFIG.font_family};`;
+  el.innerHTML = !list.length ? '' : `
+    <h2 class="font-bold mb-1" style="${font}font-size:16px;color:${CONFIG.text_color};">รับแล้ววันนี้ (${list.length})</h2>
+    ${list.slice().reverse().map(d => `
+      <div class="rcv-done-item rounded-xl mt-2" style="${font}padding:10px 12px;background-color:${CONFIG.surface_color};font-size:15px;color:${CONFIG.text_color};overflow-wrap:anywhere;">
+        <b>${escHtml_(d.document_number)}</b> ${escHtml_(d.title)}
+        <div style="font-size:14px;color:#64748b;">${escHtml_(d.time)} น.${d.pages ? ' · 📷 ' + d.pages + ' หน้า' : ''}</div>
+      </div>`).join('')}`;
 }
 
 // ============================================================
@@ -2353,7 +2435,10 @@ function render() {
     attachPlanHandlers_();
   } else if (currentScreen === 'receive') {
     app.innerHTML = renderReceiveScreen();
-    document.getElementById('pinLogoutBtn').onclick = () => endPinSession_();
+    renderReceivePages_();
+    renderReceiveStatus_();
+    renderReceiveDone_();
+    attachReceiveHandlers_();
   }
 }
 
@@ -2463,6 +2548,8 @@ function attachStatusCategoryBtns(selector) {
 function attachDocRowClickHandlers() {
   document.querySelectorAll('.doc-row-click').forEach(row => {
     row.onclick = e => {
+      const photo = e.target.closest('.doc-photo');
+      if (photo) { openExternal_(photo.dataset.url); return; }
       if (e.target.closest('select') || e.target.closest('button')) return;
       const id = row.dataset.id;
       const doc = allRecords.find(r => r.__backendId === id);
@@ -2799,6 +2886,7 @@ function startPinSession_(s) {
   planItems = Array.isArray(cached) ? cached : [];
   planLoaded = Array.isArray(cached);
   planHidden = {};
+  if (s.role === 'receive') loadReceiveDraft_();
   currentScreen = PIN_SCREENS[s.role];
   render();
   document.getElementById('app').scrollTop = 0;
@@ -2813,6 +2901,8 @@ function endPinSession_(expired) {
   planSeq++;
   cacheSet_(PIN_SESSION_KEY, null);
   cacheSet_(PLAN_QUEUE_KEY, null);
+  if (!expired) [RECEIVE_DRAFT_KEY, RECEIVE_PAGES_KEY, RECEIVE_DONE_KEY].forEach(k => cacheSet_(k, null));
+  receiveDraft = {}; receivePages = []; receiveStatus = { phase: 'idle', text: '', retry: false };
   currentScreen = 'welcome';
   render();
   if (expired) openPinForm_('⚠️ กรุณาใส่ PIN อีกครั้ง');
@@ -2879,6 +2969,166 @@ function attachPlanHandlers_() {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && currentScreen === 'plan') refreshPlan_();
 });
+
+// ─── หน้ารับเอกสาร ─────────────────────────────────────────
+function loadReceiveDraft_() {
+  const d = cacheGet_(RECEIVE_DRAFT_KEY), p = cacheGet_(RECEIVE_PAGES_KEY);
+  receiveDraft = d && typeof d === 'object' ? d : {};
+  receivePages = Array.isArray(p) ? p.filter(x => x && x.b64) : [];
+  receiveStatus = { phase: 'idle', text: '', retry: false };
+}
+
+function saveReceivePages_() {
+  if (!cacheSet_(RECEIVE_PAGES_KEY, receivePages)) showToast('⚠️ เครื่องเก็บรูปสำรองไม่พอ ถ้าปิดแอปก่อนส่ง รูปจะหาย', 'error');
+}
+
+function setReceiveStatus_(phase, text = '', retry = false) {
+  receiveStatus = { phase, text, retry };
+  renderReceiveStatus_();
+  renderReceivePages_();
+}
+
+function receiveDayKey_() { return new Date().toLocaleDateString('en-CA'); }
+function receiveDoneToday_() {
+  const list = cacheGet_(RECEIVE_DONE_KEY);
+  return Array.isArray(list) ? list.filter(d => d.day === receiveDayKey_()) : [];
+}
+
+// ด้านยาวไม่เกิน 1600 px เป็น JPEG 0.8 รูปจากกล้องมือถือ 3-12 MB จึงเหลือราว 200-400 KB
+function shrinkPhoto_(file) {
+  return new Promise((resolve, reject) => {
+    const src = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(src);
+      const scale = Math.min(1, RECEIVE_MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * scale);
+      c.height = Math.round(img.naturalHeight * scale);
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff';  // PNG โปร่งใสจะกลายเป็นพื้นดำใน JPEG
+      g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(img, 0, 0, c.width, c.height);
+      const url = c.toDataURL('image/jpeg', 0.8);
+      resolve(url.slice(url.indexOf(',') + 1));
+    };
+    img.onerror = () => { URL.revokeObjectURL(src); reject(new Error('อ่านรูปไม่ได้')); };
+    img.src = src;
+  });
+}
+
+async function addReceivePhotos_(files) {
+  if (!files.length || receiveStatus.phase === 'sending' || receiveStatus.phase === 'photo') return;
+  const prev = receiveStatus;
+  setReceiveStatus_('photo');
+  for (const f of files) {
+    try { receivePages.push({ b64: await shrinkPhoto_(f), url: '' }); }
+    catch (e) { showToast('❌ อ่านรูปไม่ได้ ลองถ่ายใหม่', 'error'); }
+    if (!pinSession) return;
+  }
+  saveReceivePages_();
+  setReceiveStatus_(prev.phase, prev.text, prev.retry);
+}
+
+function markReceiveField_(key) {
+  const el = document.getElementById('rcv_' + key);
+  if (!el) return;
+  el.style.borderColor = '#dc2626';
+  el.focus();
+}
+
+function checkReceiveForm_(d) {
+  const amount = String(d.amount || '').replace(/[,\s]/g, '');
+  if (!String(d.document_number || '').trim()) return ['document_number', 'กรอกเลขที่เอกสาร'];
+  if (!String(d.title || '').trim()) return ['title', 'กรอกเรื่อง'];
+  if (amount && !/^\d+(\.\d{1,2})?$/.test(amount)) return ['amount', 'ยอดเงินต้องเป็นตัวเลข เช่น 1500 หรือ 1,500.50'];
+  return null;
+}
+
+async function sendReceive_() {
+  if (receiveStatus.phase === 'sending' || receiveStatus.phase === 'photo') return;
+  const bad = checkReceiveForm_(receiveDraft);
+  if (bad) { setReceiveStatus_('error', bad[1]); markReceiveField_(bad[0]); return; }
+  const num = receiveDraft.document_number.trim();
+  for (let i = 0; i < receivePages.length; i++) {
+    const page = receivePages[i];
+    if (page.url) continue;
+    setReceiveStatus_('sending', `กำลังส่งรูป ${i + 1}/${receivePages.length}`);
+    const res = await GAS.uploadReceivePhoto({ fileName: `${num}-p${i + 1}.jpg`, mimeType: 'image/jpeg', base64Data: page.b64 });
+    if (!pinSession) return;
+    if (!res.ok) { receiveFailed_(res, num); return; }
+    page.url = res.url;
+    saveReceivePages_();
+  }
+  setReceiveStatus_('sending', 'กำลังบันทึกเอกสาร');
+  const res = await GAS.create({
+    document_number: num, sender: String(receiveDraft.sender || '').trim(), title: receiveDraft.title.trim(),
+    amount: String(receiveDraft.amount || '').replace(/[,\s]/g, ''), doc_date: receiveDraft.doc_date || '',
+    file_url: receivePages.map(p => p.url).join(' ')
+  });
+  if (!pinSession) return;
+  if (!res.ok) { receiveFailed_(res, num); return; }
+  const now = new Date();
+  cacheSet_(RECEIVE_DONE_KEY, receiveDoneToday_().concat({
+    document_number: num, title: receiveDraft.title.trim(), pages: receivePages.length,
+    day: receiveDayKey_(), time: now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
+  }));
+  clearReceiveForm_();
+  showToast(`✅ รับเอกสาร ${num} แล้ว`);
+}
+
+function receiveFailed_(res, num) {
+  if (res.code === 'UNAUTHORIZED') { pinUnauthorized_(); return; }
+  if (res.code === 'DUPLICATE') {
+    setReceiveStatus_('error', `เลขที่ ${num} มีอยู่ในระบบแล้ว ตรวจเลขที่อีกครั้ง (ถ้าเพิ่งส่งตอนเน็ตหลุด แปลว่าเข้าระบบแล้ว กดล้างฟอร์มได้)`);
+    markReceiveField_('document_number');
+    return;
+  }
+  // ไม่มี code = เน็ตหลุดหรือ GAS ไม่ตอบ ส่วน BUSY / UPLOAD_FAILED ลองใหม่ได้
+  if (!res.code || res.code === 'BUSY' || res.code === 'UPLOAD_FAILED') {
+    setReceiveStatus_('error', 'ส่งไม่สำเร็จ ข้อมูลและรูปยังอยู่ในเครื่อง กด "ส่งอีกครั้ง" เมื่อเน็ตกลับมา', true);
+    return;
+  }
+  setReceiveStatus_('error', res.error || 'ส่งไม่สำเร็จ');
+}
+
+function clearReceiveForm_() {
+  receiveDraft = {};
+  receivePages = [];
+  receiveStatus = { phase: 'idle', text: '', retry: false };
+  cacheSet_(RECEIVE_DRAFT_KEY, null);
+  cacheSet_(RECEIVE_PAGES_KEY, null);
+  render();
+  document.getElementById('app').scrollTop = 0;
+}
+
+function attachReceiveHandlers_() {
+  document.getElementById('pinLogoutBtn').onclick = () => endPinSession_();
+  const input = document.getElementById('rcvPhoto');
+  document.getElementById('rcvPhotoBtn').onclick = () => input.click();
+  input.onchange = () => {
+    const files = Array.from(input.files);
+    input.value = '';  // เลือกรูปเดิมซ้ำได้
+    addReceivePhotos_(files);
+  };
+  document.getElementById('rcvPages').onclick = e => {
+    const del = e.target.closest('.rcv-del');
+    if (!del || receiveStatus.phase === 'sending') return;
+    receivePages.splice(Number(del.dataset.i), 1);
+    saveReceivePages_();
+    renderReceivePages_();
+  };
+  const form = document.getElementById('rcvForm');
+  form.oninput = form.onchange = e => {
+    const key = e.target.dataset.field;
+    if (!key) return;
+    receiveDraft[key] = e.target.value;
+    e.target.style.borderColor = '#cbd5e1';
+    cacheSet_(RECEIVE_DRAFT_KEY, receiveDraft);
+  };
+  document.getElementById('rcvSend').onclick = () => sendReceive_();
+  document.getElementById('rcvClear').onclick = () => showConfirm('ล้างข้อมูลในฟอร์มและรูปทั้งหมด?', clearReceiveForm_);
+}
 
 // ─── Staff ────────────────────────────────────────────────
 function attachStaffHandlers() {
@@ -3045,7 +3295,7 @@ function attachStaffHandlers() {
     btn.onclick = e => {
       const rec = allRecords.find(r => r.__backendId === e.target.dataset.id);
       if (!rec) return;
-      showConfirm(`ต้องการลบเอกสาร "${rec.title}" ใช่หรือไม่?`, async () => {
+      showConfirm(`ต้องการลบเอกสาร "${escHtml_(rec.title)}" ใช่หรือไม่?`, async () => {
         const res = await GAS.delete(rec);
         if (res.ok) {
           delete pendingDocChanges[rec.__backendId];
