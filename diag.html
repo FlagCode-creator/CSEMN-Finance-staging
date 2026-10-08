@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>[ระบบทดลอง] ตรวจการเชื่อมต่อ</title>
+<style>
+  :root { --bg:#f0f9ff; --card:#fff; --text:#1e3a8a; --muted:#475569; --ok:#067647; --bad:#b42318; --line:#dbeafe; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--text); font:16px/1.5 'Sarabun', system-ui, sans-serif; }
+  .card { max-width:640px; margin:0 auto 12px; background:var(--card); border-radius:16px; padding:16px; box-shadow:0 4px 14px rgba(30,58,138,.08); }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p { margin:4px 0; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td { padding:6px 4px; border-top:1px solid var(--line); vertical-align:top; word-break:break-word; }
+  td:first-child { font-weight:700; width:42%; }
+  .ok { color:var(--ok); font-weight:700; } .bad { color:var(--bad); font-weight:700; }
+  button { width:100%; padding:14px; margin-top:8px; border:0; border-radius:12px; font:700 16px 'Sarabun', system-ui, sans-serif; color:#fff; background:#2563eb; }
+  button.warn { background:#dc2626; } button.plain { background:#e2e8f0; color:var(--text); }
+  button:disabled { opacity:.5; }
+</style>
+</head>
+<body><div style="position:fixed;left:8px;bottom:8px;z-index:99999;background:#dc2626;color:#fff;padding:4px 12px;border-radius:9999px;font:600 13px sans-serif;pointer-events:none">ระบบทดลอง</div>
+<div class="card">
+  <h1>ตรวจการเชื่อมต่อของเครื่องนี้</h1>
+  <p>หน้านี้ไม่ใช้รหัสผ่าน และไม่เขียนข้อมูลใดๆ ลงระบบ</p>
+  <button id="run">▶️ เริ่มตรวจ</button>
+</div>
+<div class="card"><table id="out"><tr><td>สถานะ</td><td>ยังไม่ได้ตรวจ</td></tr></table></div>
+<div class="card">
+  <p>ถ้าตรวจแล้วเชื่อมต่อได้ แต่หน้าหลักยังค้าง ให้กดล้างข้อมูลที่เว็บนี้เก็บไว้ในเครื่อง แล้วลองล็อกอินใหม่</p>
+  <button id="clear" class="warn">🧹 ล้างข้อมูลของเว็บนี้ในเครื่อง</button>
+  <button id="copy" class="plain">📋 คัดลอกผลตรวจ</button>
+  <button id="home" class="plain">← กลับหน้าหลัก</button>
+</div>
+<script>
+const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbyBD3nVMyWwfQeTf9ZxpWayLMHCsQSzzBEs7G6XvT24eAL9Eld9VM2sYGxp1PAYZGD49w/exec';
+const NS = location.pathname.replace(/[^/]*$/, '');
+const out = document.getElementById('out');
+const rows = [];
+
+function row(label, value, good) {
+  rows.push(label + ': ' + value);
+  const tr = document.createElement('tr');
+  const a = document.createElement('td'), b = document.createElement('td');
+  a.textContent = label;
+  b.textContent = value;
+  if (good === true) b.className = 'ok';
+  if (good === false) b.className = 'bad';
+  tr.append(a, b);
+  out.appendChild(tr);
+}
+
+async function timed(label, makeRequest) {
+  const t0 = performance.now();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 45000);
+  try {
+    const res = await makeRequest(ctrl.signal);
+    const text = await res.text();
+    const ms = Math.round(performance.now() - t0);
+    let json = null;
+    try { json = JSON.parse(text); } catch (e) {}
+    if (json) row(label, ms + ' ms · ตอบปกติ' + (json.code ? ' (' + json.code + ')' : ''), true);
+    else row(label, ms + ' ms · ได้หน้า HTML แทนข้อมูล (HTTP ' + res.status + ')', false);
+  } catch (e) {
+    const ms = Math.round(performance.now() - t0);
+    row(label, ms + ' ms · ' + (e.name === 'AbortError' ? 'รอเกิน 45 วินาที' : 'ส่งไม่ออก: ' + e.message), false);
+  } finally { clearTimeout(timer); }
+}
+
+document.getElementById('run').onclick = async () => {
+  const btn = document.getElementById('run');
+  btn.disabled = true; btn.textContent = 'กำลังตรวจ...';
+  out.textContent = ''; rows.length = 0;
+  row('เวลา', new Date().toLocaleString('th-TH'));
+  row('เบราว์เซอร์', navigator.userAgent);
+  row('ออนไลน์', navigator.onLine ? 'ใช่' : 'ไม่', navigator.onLine);
+  const regs = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistrations() : [];
+  row('Service worker ของเว็บนี้', regs.filter(r => r.scope.includes(NS)).length + ' ตัว · ทั้งโดเมน ' + regs.length + ' ตัว');
+  row('Cache ของเบราว์เซอร์', ('caches' in window ? (await caches.keys()).join(', ') : '-') || 'ไม่มี');
+  const keys = Object.keys(localStorage);
+  row('ข้อมูลที่เว็บนี้จำไว้', keys.filter(k => k.startsWith(NS)).map(k => k.slice(NS.length)).join(', ') || 'ไม่มี');
+  row('ข้อมูลอื่นบนโดเมนเดียวกัน', keys.filter(k => !k.startsWith(NS)).length + ' รายการ');
+  await timed('GAS แบบ GET (ตรวจสิทธิ์)', s => fetch(GAS_API_URL + '?action=checkAuth&cb=' + Date.now(), { signal: s, redirect: 'follow' }));
+  await timed('GAS แบบ GET (ตัวเลขหน้าแรก)', s => fetch(GAS_API_URL + '?action=getScopedData&payload=' + encodeURIComponent('{"level":"welcome"}') + '&cb=' + Date.now(), { signal: s, redirect: 'follow' }));
+  await timed('GAS แบบ POST', s => fetch(GAS_API_URL, { method: 'POST', signal: s, redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'getQueue', payload: { status: 2 } }) }));
+  btn.disabled = false; btn.textContent = '▶️ ตรวจอีกครั้ง';
+};
+
+document.getElementById('clear').onclick = async () => {
+  if (!confirm('ล้างข้อมูลที่เว็บนี้เก็บไว้ในเครื่อง? ต้องล็อกอินใหม่ และเครื่องจะลืม PIN ที่จำไว้')) return;
+  Object.keys(localStorage).filter(k => k.startsWith(NS)).forEach(k => localStorage.removeItem(k));
+  if ('serviceWorker' in navigator) {
+    for (const r of await navigator.serviceWorker.getRegistrations()) if (r.scope.includes(NS)) await r.unregister();
+  }
+  if ('caches' in window) for (const k of await caches.keys()) await caches.delete(k);
+  alert('ล้างแล้ว จะกลับไปหน้าหลัก');
+  location.href = './index.html?cb=' + Date.now();
+};
+
+document.getElementById('copy').onclick = async () => {
+  try { await navigator.clipboard.writeText(rows.join('\n')); alert('คัดลอกแล้ว'); }
+  catch (e) { prompt('คัดลอกข้อความนี้', rows.join(' | ')); }
+};
+document.getElementById('home').onclick = () => { location.href = './index.html'; };
+</script>
+</body>
+</html>
