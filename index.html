@@ -2640,17 +2640,30 @@ function attachWelcomeHandlers() {
     document.getElementById('menuSection').classList.remove('hidden');
     document.getElementById('loginError').classList.add('hidden');
   };
+  // ปุ่มบอกเวลาที่รอ GAS (ครั้งละได้ถึง 60 วิ ลองซ้ำ 3 ครั้ง) ผู้ใช้จะแยกได้ว่ากำลังรอหรือค้าง
+  const waitLabel_ = (btn, text) => {
+    const t0 = Date.now();
+    const draw = () => {
+      const s = Math.floor((Date.now() - t0) / 1000);
+      btn.innerHTML = '<span class="spinner"></span>' + text + (s >= 3 ? ' ' + s + ' วิ' : '') + (s >= 15 ? '<br><span style="font-size:13px;font-weight:400;">เซิร์ฟเวอร์ Google ตอบช้า กำลังรอ...</span>' : '');
+    };
+    draw();
+    const timer = setInterval(draw, 1000);
+    return () => clearInterval(timer);
+  };
   document.getElementById('doLoginBtn').onclick = async () => {
     const user = document.getElementById('username').value.trim();
     const pass = document.getElementById('password').value.trim();
     const errEl = document.getElementById('loginError');
 
     const btn = document.getElementById('doLoginBtn');
-    const orig = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>กำลังเข้าสู่ระบบ...';
+    const orig = btn.innerHTML; btn.disabled = true;
+    const stopWait = waitLabel_(btn, 'กำลังเข้าสู่ระบบ...');
 
     authCredential = { user: user, pass: pass }; // ส่งบัญชีให้ GAS ตรวจ — หน้าเว็บไม่เก็บรหัสเจ้าหน้าที่ไว้เลย
     // GAS ช้าต่อครั้ง (วัดได้ 1-30 วิ) จึงตรวจรหัสกับโหลดข้อมูลเต็มในคำขอเดียว แทน checkAuth แล้วค่อยโหลด
     const res = await GAS.getScoped({ level: 'full' });
+    stopWait();
     btn.disabled = false; btn.innerHTML = orig;
 
     if (res.ok && res.grant === 'staff') {
@@ -2680,8 +2693,10 @@ function attachWelcomeHandlers() {
     if (!/^\d{6}$/.test(pin)) { showErr('กรอก PIN ตัวเลข 6 หลัก'); return; }
 
     const btn = document.getElementById('doPinBtn');
-    const orig = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>กำลังเข้าสู่ระบบ...';
+    const orig = btn.innerHTML; btn.disabled = true;
+    const stopWait = waitLabel_(btn, 'กำลังเข้าสู่ระบบ...');
     const res = await GAS.pinLogin({ pin });
+    stopWait();
     btn.disabled = false; btn.innerHTML = orig;
 
     if (res.ok && PIN_SCREENS[res.role]) {
