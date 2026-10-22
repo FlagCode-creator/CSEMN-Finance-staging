@@ -382,7 +382,7 @@ function renderSafe_() {
   if (g('publicPasscode')) g('publicPasscode').value = st.code;
   if (g('username')) g('username').value = st.user;
   if (g('password')) g('password').value = st.pw;
-  if (g('pinCode')) g('pinCode').value = st.pinCode;
+  if (g('pinCode')) { g('pinCode').value = st.pinCode; syncPinBoxes_(); }
   if (st.pinErr) { g('pinError').textContent = st.pinErr; g('pinError').classList.remove('hidden'); }
   if (st.focus && g(st.focus)) g(st.focus).focus();
 }
@@ -1509,12 +1509,16 @@ function renderWelcome() {
               <div id="menuSection" class="space-y-3">
                 <button id="viewPublicBtn" class="w-full btn-hover py-3.5 rounded-xl font-bold text-white" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size}px;background:linear-gradient(135deg,${CONFIG.primary_color},${CONFIG.accent_color});">🔍 ติดตามสถานะเอกสาร</button>
                 <button id="loginStaffBtn" class="w-full btn-hover py-3.5 rounded-xl font-bold" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size}px;color:${CONFIG.text_color};background-color:${CONFIG.background_color};">🔐 เข้าสู่ระบบเจ้าหน้าที่</button>
-                <button id="loginPinBtn" class="w-full btn-hover py-3.5 rounded-xl font-bold" style="font-family:${CONFIG.font_family};font-size:${CONFIG.font_size}px;color:${CONFIG.text_color};background-color:${CONFIG.background_color};">🔢 เข้าสู่ระบบด้วย PIN</button>
+                <button id="loginPinBtn" class="w-full py-1" style="font-family:${CONFIG.font_family};font-size:13px;color:${CONFIG.text_color};background:none;border:0;opacity:.5;text-decoration:underline;">เข้าด้วย PIN</button>
               </div>
               <div id="pinSection" class="hidden space-y-3">
                 <div>
-                  <label class="block font-bold mb-1.5" for="pinCode" style="font-family:${CONFIG.font_family};font-size:16px;color:${CONFIG.text_color};">PIN 6 หลัก</label>
-                  <input type="password" id="pinCode" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" class="w-full px-4 py-3 rounded-xl border-2 text-center font-bold tracking-widest" style="font-family:${CONFIG.font_family};font-size:20px;border-color:${CONFIG.primary_color};">
+                  <label class="block font-bold mb-1.5 text-center" for="pinCode" style="font-family:${CONFIG.font_family};font-size:16px;color:${CONFIG.text_color};">PIN 6 หลัก</label>
+                  <!-- ช่องกรอกจริงช่องเดียววางทับ 6 กล่องที่เห็น คีย์บอร์ดตัวเลข การวาง การลบ และการเติมรหัสของ iPhone จึงทำงานตามปกติ -->
+                  <div style="position:relative;display:flex;gap:8px;justify-content:center;">
+                    ${[0,1,2,3,4,5].map(i => `<div class="pin-box" style="flex:1;max-width:52px;height:56px;border:2px solid ${CONFIG.primary_color};border-radius:12px;background:#fff;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:700;color:${CONFIG.text_color};"></div>`).join('')}
+                    <input type="text" id="pinCode" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;font-size:16px;caret-color:transparent;">
+                  </div>
                 </div>
                 <div id="pinError" class="hidden p-3 rounded-xl font-bold text-sm" style="background-color:#fee2e2;color:#991b1b;font-family:${CONFIG.font_family};"></div>
                 <button id="doPinBtn" class="w-full btn-hover py-3.5 rounded-xl font-bold text-white" style="font-family:${CONFIG.font_family};font-size:16px;background:linear-gradient(135deg,${CONFIG.primary_color},${CONFIG.accent_color});">เข้าสู่ระบบ</button>
@@ -2884,19 +2888,44 @@ function attachWelcomeHandlers() {
       return;
     }
     pinEl.value = '';
+    syncPinBoxes_();
+    pinEl.focus();
     showErr(res.code === 'LOCKED' ? 'มีการใส่ PIN ผิดหลายครั้ง ลองใหม่ใน 10 นาที'
           : res.code === 'BAD_PIN' ? 'PIN ไม่ถูกต้อง'
           : 'เชื่อมต่อไม่ได้ ลองอีกครั้ง');
   };
-  document.getElementById('pinCode').onkeydown = e => {
+  const pinInput = document.getElementById('pinCode');
+  pinInput.onkeydown = e => {
     if (e.key === 'Enter') document.getElementById('doPinBtn').click();
   };
+  pinInput.oninput = () => {
+    syncPinBoxes_();
+    const btn = document.getElementById('doPinBtn');
+    if (pinInput.value.length === 6 && !btn.disabled) btn.click();
+  };
+  pinInput.onfocus = pinInput.onblur = syncPinBoxes_;
+  syncPinBoxes_();
+}
+
+// เติม 6 กล่องจากค่าในช่องกรอกจริง: ช่องที่กรอกแล้วแสดง ● และกล่องถัดไปมีกรอบเด่นตอนกำลังพิมพ์
+function syncPinBoxes_() {
+  const input = document.getElementById('pinCode');
+  if (!input) return;
+  const digits = input.value.replace(/\D/g, '').slice(0, 6);
+  if (input.value !== digits) input.value = digits;
+  const focused = document.activeElement === input;
+  document.querySelectorAll('#pinSection .pin-box').forEach((box, i) => {
+    box.textContent = i < digits.length ? '●' : '';
+    const active = focused && i === Math.min(digits.length, 5);
+    box.style.boxShadow = active ? `0 0 0 3px ${CONFIG.accent_color}55` : 'none';
+  });
 }
 
 function openPinForm_(message) {
   document.getElementById('menuSection').classList.add('hidden');
   document.getElementById('pinSection').classList.remove('hidden');
   document.getElementById('pinCode').value = '';
+  syncPinBoxes_();
   const errEl = document.getElementById('pinError');
   errEl.textContent = message;
   errEl.classList.toggle('hidden', !message);
